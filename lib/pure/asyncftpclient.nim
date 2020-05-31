@@ -131,12 +131,13 @@ type
 const multiLineLimit = 10000
 
 proc expectReply(ftp: AsyncFtpClient): Future[TaintedString] {.async.} =
-  result = await ftp.csock.recvLine()
+  var line = await ftp.csock.recvLine()
+  result = TaintedString(line)
   var count = 0
-  while result[3] == '-':
+  while line[3] == '-':
     ## Multi-line reply.
-    let line = await ftp.csock.recvLine()
-    result.add("\n" & line)
+    line = await ftp.csock.recvLine()
+    string(result).add("\n" & line)
     count.inc()
     if count >= multiLineLimit:
       raise newException(ReplyError, "Reached maximum multi-line reply count.")
@@ -178,7 +179,7 @@ proc connect*(ftp: AsyncFtpClient) {.async.} =
   await ftp.csock.connect(ftp.address, ftp.port)
 
   var reply = await ftp.expectReply()
-  if reply.startsWith("120"):
+  if string(reply).startsWith("120"):
     # 120 Service ready in nnn minutes.
     # We wait until we receive 220.
     reply = await ftp.expectReply()
@@ -321,7 +322,7 @@ proc getFile(ftp: AsyncFtpClient, file: File, total: BiggestInt,
   assertReply(await(ftp.expectReply()), "226")
 
 proc defaultOnProgressChanged*(total, progress: BiggestInt,
-    speed: float): Future[void] {.nimcall, gcsafe, procvar.} =
+    speed: float): Future[void] {.nimcall, gcsafe.} =
   ## Default FTP ``onProgressChanged`` handler. Does nothing.
   result = newFuture[void]()
   #echo(total, " ", progress, " ", speed)
@@ -357,7 +358,7 @@ proc doUpload(ftp: AsyncFtpClient, file: File,
   var countdownFut = sleepAsync(1000)
   var sendFut: Future[void] = nil
   while ftp.dsockConnected:
-    if sendFut == nil or sendFut.finished: 
+    if sendFut == nil or sendFut.finished:
       # TODO: Async file reading.
       let len = file.readBuffer(addr(data[0]), 4000)
       setLen(data, len)

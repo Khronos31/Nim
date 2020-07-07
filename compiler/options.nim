@@ -39,9 +39,7 @@ type                          # please make sure we have under 32 options
                               # evaluation
     optTrMacros,              # en/disable pattern matching
     optMemTracker,
-    optLaxStrings,
     optNilSeqs,
-    optOldAst,
     optSinkInference          # 'sink T' inference
 
 
@@ -273,6 +271,7 @@ type
     lazyPaths*: seq[AbsoluteDir]
     outFile*: RelativeFile
     outDir*: AbsoluteDir
+    jsonBuildFile*: AbsoluteFile
     prefixDir*, libpath*, nimcacheDir*: AbsoluteDir
     dllOverrides, moduleOverrides*, cfileSpecificOptions*: StringTableRef
     projectName*: string # holds a name like 'nim'
@@ -281,6 +280,7 @@ type
     projectIsStdin*: bool # whether we're compiling from stdin
     lastMsgWasDot*: bool # the last compiler message was a single '.'
     projectMainIdx*: FileIndex # the canonical path id of the main module
+    projectMainIdx2*: FileIndex # consider merging with projectMainIdx
     command*: string # the main command (e.g. cc, check, scan, etc)
     commandArgs*: seq[string] # any arguments after the main command
     commandLine*: string
@@ -315,6 +315,14 @@ type
                                 severity: Severity) {.closure, gcsafe.}
     cppCustomNamespace*: string
 
+proc assignIfDefault*[T](result: var T, val: T, def = default(T)) =
+  ## if `result` was already assigned to a value (that wasn't `def`), this is a noop.
+  if result == def: result = val
+
+template setErrorMaxHighMaybe*(conf: ConfigRef) =
+  ## do not stop after first error (but honor --errorMax if provided)
+  assignIfDefault(conf.errorMax, high(int))
+
 proc setNoteDefaults*(conf: ConfigRef, note: TNoteKind, enabled = true) =
   template fun(op) =
     conf.notes.op note
@@ -328,7 +336,10 @@ proc setNote*(conf: ConfigRef, note: TNoteKind, enabled = true) =
     if enabled: incl(conf.notes, note) else: excl(conf.notes, note)
 
 proc hasHint*(conf: ConfigRef, note: TNoteKind): bool =
-  optHints in conf.options and note in conf.notes
+  if optHints notin conf.options: false
+  elif note in {hintConf}: # could add here other special notes like hintSource
+    note in conf.mainPackageNotes
+  else: note in conf.notes
 
 proc hasWarn*(conf: ConfigRef, note: TNoteKind): bool =
   optWarns in conf.options and note in conf.notes
@@ -548,11 +559,8 @@ proc getOutFile*(conf: ConfigRef; filename: RelativeFile, ext: string): Absolute
   result = conf.outDir / changeFileExt(filename, ext)
 
 proc absOutFile*(conf: ConfigRef): AbsoluteFile =
-  if false:
-    doAssert not conf.outDir.isEmpty
-    doAssert not conf.outFile.isEmpty
-    # xxx: fix this pre-existing bug causing `SuccessX` error messages to lie
-    # for `jsonscript`
+  doAssert not conf.outDir.isEmpty
+  doAssert not conf.outFile.isEmpty
   result = conf.outDir / conf.outFile
   when defined(posix):
     if dirExists(result.string): result.string.add ".out"
@@ -731,7 +739,7 @@ proc getRelativePathFromConfigPath*(conf: ConfigRef; f: AbsoluteFile): RelativeF
 
 proc findFile*(conf: ConfigRef; f: string; suppressStdlib = false): AbsoluteFile =
   if f.isAbsolute:
-    result = if f.existsFile: AbsoluteFile(f) else: AbsoluteFile""
+    result = if f.fileExists: AbsoluteFile(f) else: AbsoluteFile""
   else:
     result = rawFindFile(conf, RelativeFile f, suppressStdlib)
     if result.isEmpty:

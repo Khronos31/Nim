@@ -7,23 +7,30 @@
 #    distribution, for details about the copyright.
 #
 
-## This module implements procs to determine the number of CPUs / cores.
+## This module implements a proc to determine the number of CPUs / cores.
+
+runnableExamples:
+  doAssert countProcessors() > 0
+
 
 include "system/inclrtl"
 
-when not defined(windows):
+when defined(posix) and not (defined(macosx) or defined(bsd)):
   import posix
 
+when defined(windows):
+  import std/private/win_getsysteminfo
+
 when defined(freebsd) or defined(macosx):
-  {.emit:"#include <sys/types.h>".}
+  {.emit: "#include <sys/types.h>".}
 
 when defined(openbsd) or defined(netbsd):
-  {.emit:"#include <sys/param.h>".}
+  {.emit: "#include <sys/param.h>".}
 
 when defined(macosx) or defined(bsd):
   # we HAVE to emit param.h before sysctl.h so we cannot use .header here
   # either. The amount of archaic bullshit in Poonix based OSes is just insane.
-  {.emit:"#include <sys/sysctl.h>".}
+  {.emit: "#include <sys/sysctl.h>".}
   const
     CTL_HW = 6
     HW_AVAILCPU = 25
@@ -47,28 +54,13 @@ when defined(haiku):
                                                     header: "<OS.h>".}
 
 proc countProcessors*(): int {.rtl, extern: "ncpi$1".} =
-  ## returns the number of the processors/cores the machine has.
+  ## Returns the number of the processors/cores the machine has.
   ## Returns 0 if it cannot be detected.
   when defined(windows):
-    type
-      SYSTEM_INFO {.final, pure.} = object
-        u1: int32
-        dwPageSize: int32
-        lpMinimumApplicationAddress: pointer
-        lpMaximumApplicationAddress: pointer
-        dwActiveProcessorMask: ptr int32
-        dwNumberOfProcessors: int32
-        dwProcessorType: int32
-        dwAllocationGranularity: int32
-        wProcessorLevel: int16
-        wProcessorRevision: int16
-
-    proc GetSystemInfo(lpSystemInfo: var SYSTEM_INFO) {.stdcall, dynlib: "kernel32", importc: "GetSystemInfo".}
-
     var
-      si: SYSTEM_INFO
-    GetSystemInfo(si)
-    result = si.dwNumberOfProcessors
+      si: SystemInfo
+    getSystemInfo(addr si)
+    result = int(si.dwNumberOfProcessors)
   elif defined(macosx) or defined(bsd):
     var
       mib: array[0..3, cint]
@@ -95,8 +87,3 @@ proc countProcessors*(): int {.rtl, extern: "ncpi$1".} =
   else:
     result = sysconf(SC_NPROCESSORS_ONLN)
   if result <= 0: result = 0
-
-
-runnableExamples:
-  block:
-    doAssert countProcessors() > 0

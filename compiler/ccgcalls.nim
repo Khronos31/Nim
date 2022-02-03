@@ -76,7 +76,7 @@ proc fixupCall(p: BProc, le, ri: PNode, d: var TLoc,
   # getUniqueType() is too expensive here:
   var typ = skipTypes(ri[0].typ, abstractInst)
   if typ[0] != nil:
-    if isInvalidReturnType(p.config, typ[0]):
+    if isInvalidReturnType(p.config, typ):
       if params != nil: pl.add(~", ")
       # beware of 'result = p(result)'. We may need to allocate a temporary:
       if d.k in {locTemp, locNone} or not preventNrvo(p, le, ri):
@@ -141,9 +141,61 @@ proc fixupCall(p: BProc, le, ri: PNode, d: var TLoc,
 
 proc genBoundsCheck(p: BProc; arr, a, b: TLoc)
 
-proc openArrayLoc(p: BProc, formalType: PType, n: PNode): Rope =
-  var a: TLoc
+proc reifiedOpenArray(n: PNode): bool {.inline.} =
+  var x = n
+  while x.kind in {nkAddr, nkHiddenAddr, nkHiddenStdConv, nkHiddenDeref}:
+    x = x[0]
+  if x.kind == nkSym and x.sym.kind == skParam:
+    result = false
+  else:
+    result = true
 
+proc genOpenArraySlice(p: BProc; q: PNode; formalType, destType: PType): (Rope, Rope) =
+  var a, b, c: TLoc
+  initLocExpr(p, q[1], a)
+  initLocExpr(p, q[2], b)
+  initLocExpr(p, q[3], c)
+  # but first produce the required index checks:
+  if optBoundsCheck in p.options:
+    genBoundsCheck(p, a, b, c)
+  let ty = skipTypes(a.t, abstractVar+{tyPtr})
+  let dest = getTypeDesc(p.module, destType)
+  let lengthExpr = "($1)-($2)+1" % [rdLoc(c), rdLoc(b)]
+  case ty.kind
+  of tyArray:
+    let first = toInt64(firstOrd(p.config, ty))
+    if first == 0:
+      result = ("($3*)(($1)+($2))" % [rdLoc(a), rdLoc(b), dest],
+                lengthExpr)
+    else:
+      result = ("($4*)($1)+(($2)-($3))" %
+        [rdLoc(a), rdLoc(b), intLiteral(first), dest],
+        lengthExpr)
+  of tyOpenArray, tyVarargs:
+    if reifiedOpenArray(q[1]):
+      result = ("($3*)($1.Field0)+($2)" % [rdLoc(a), rdLoc(b), dest],
+                lengthExpr)
+    else:
+      result = ("($3*)($1)+($2)" % [rdLoc(a), rdLoc(b), dest],
+                lengthExpr)
+  of tyUncheckedArray, tyCstring:
+    result = ("($3*)($1)+($2)" % [rdLoc(a), rdLoc(b), dest],
+              lengthExpr)
+  of tyString, tySequence:
+    let atyp = skipTypes(a.t, abstractInst)
+    if formalType.skipTypes(abstractInst).kind in {tyVar} and atyp.kind == tyString and
+        optSeqDestructors in p.config.globalOptions:
+      linefmt(p, cpsStmts, "#nimPrepareStrMutationV2($1);$n", [byRefLoc(p, a)])
+    if atyp.kind in {tyVar} and not compileToCpp(p.module):
+      result = ("($4*)(*$1)$3+($2)" % [rdLoc(a), rdLoc(b), dataField(p), dest],
+                lengthExpr)
+    else:
+      result = ("($4*)$1$3+($2)" % [rdLoc(a), rdLoc(b), dataField(p), dest],
+                lengthExpr)
+  else:
+    internalError(p.config, "openArrayLoc: " & typeToString(a.t))
+
+proc openArrayLoc(p: BProc, formalType: PType, n: PNode): Rope =
   var q = skipConv(n)
   var skipped = false
   while q.kind == nkStmtListExpr and q.len > 0:
@@ -157,41 +209,20 @@ proc openArrayLoc(p: BProc, formalType: PType, n: PNode): Rope =
         for i in 0..<q.len-1:
           genStmts(p, q[i])
         q = q.lastSon
-    var b, c: TLoc
-    initLocExpr(p, q[1], a)
-    initLocExpr(p, q[2], b)
-    initLocExpr(p, q[3], c)
-    # but first produce the required index checks:
-    if optBoundsCheck in p.options:
-      genBoundsCheck(p, a, b, c)
-    let ty = skipTypes(a.t, abstractVar+{tyPtr})
-    let dest = getTypeDesc(p.module, n.typ[0])
-    case ty.kind
-    of tyArray:
-      let first = toInt64(firstOrd(p.config, ty))
-      if first == 0:
-        result = "($4*)(($1)+($2)), ($3)-($2)+1" % [rdLoc(a), rdLoc(b), rdLoc(c), dest]
-      else:
-        result = "($5*)($1)+(($2)-($4)), ($3)-($2)+1" %
-          [rdLoc(a), rdLoc(b), rdLoc(c), intLiteral(first), dest]
-    of tyOpenArray, tyVarargs, tyUncheckedArray, tyCString:
-      result = "($4*)($1)+($2), ($3)-($2)+1" % [rdLoc(a), rdLoc(b), rdLoc(c), dest]
-    of tyString, tySequence:
-      let atyp = skipTypes(a.t, abstractInst)
-      if formalType.skipTypes(abstractInst).kind in {tyVar} and atyp.kind == tyString and
-          optSeqDestructors in p.config.globalOptions:
-        linefmt(p, cpsStmts, "#nimPrepareStrMutationV2($1);$n", [byRefLoc(p, a)])
-      if atyp.kind in {tyVar} and not compileToCpp(p.module):
-        result = "($5*)(*$1)$4+($2), ($3)-($2)+1" % [rdLoc(a), rdLoc(b), rdLoc(c), dataField(p), dest]
-      else:
-        result = "($5*)$1$4+($2), ($3)-($2)+1" % [rdLoc(a), rdLoc(b), rdLoc(c), dataField(p), dest]
-    else:
-      internalError(p.config, "openArrayLoc: " & typeToString(a.t))
+    let (x, y) = genOpenArraySlice(p, q, formalType, n.typ[0])
+    result = x & ", " & y
   else:
-    initLocExpr(p, n, a)
-    case skipTypes(a.t, abstractVar).kind
+    var a: TLoc
+    initLocExpr(p, if n.kind == nkHiddenStdConv: n[1] else: n, a)
+    case skipTypes(a.t, abstractVar+{tyStatic}).kind
     of tyOpenArray, tyVarargs:
-      result = "$1, $1Len_0" % [rdLoc(a)]
+      if reifiedOpenArray(n):
+        if a.t.kind in {tyVar, tyLent}:
+          result = "$1->Field0, $1->Field1" % [rdLoc(a)]
+        else:
+          result = "$1.Field0, $1.Field1" % [rdLoc(a)]
+      else:
+        result = "$1, $1Len_0" % [rdLoc(a)]
     of tyString, tySequence:
       let ntyp = skipTypes(n.typ, abstractInst)
       if formalType.skipTypes(abstractInst).kind in {tyVar} and ntyp.kind == tyString and
@@ -218,13 +249,19 @@ proc openArrayLoc(p: BProc, formalType: PType, n: PNode): Rope =
     else: internalError(p.config, "openArrayLoc: " & typeToString(a.t))
 
 proc withTmpIfNeeded(p: BProc, a: TLoc, needsTmp: bool): TLoc =
-  if needsTmp:
-    var tmp: TLoc
-    getTemp(p, a.lode.typ, tmp, needsInit=false)
-    genAssignment(p, tmp, a, {})
-    tmp
+  # Bug https://github.com/status-im/nimbus-eth2/issues/1549
+  # Aliasing is preferred over stack overflows.
+  # Also don't regress for non ARC-builds, too risky.
+  if needsTmp and a.lode.typ != nil and p.config.selectedGC in {gcArc, gcOrc} and
+      getSize(p.config, a.lode.typ) < 1024:
+    getTemp(p, a.lode.typ, result, needsInit=false)
+    genAssignment(p, result, a, {})
   else:
-    a
+    result = a
+
+proc literalsNeedsTmp(p: BProc, a: TLoc): TLoc =
+  getTemp(p, a.lode.typ, result, needsInit=false)
+  genAssignment(p, result, a, {})
 
 proc genArgStringToCString(p: BProc, n: PNode, needsTmp: bool): Rope {.inline.} =
   var a: TLoc
@@ -240,7 +277,10 @@ proc genArg(p: BProc, n: PNode, param: PSym; call: PNode, needsTmp = false): Rop
     result = openArrayLoc(p, param.typ, n)
   elif ccgIntroducedPtr(p.config, param, call[0].typ[0]):
     initLocExpr(p, n, a)
-    result = addrLoc(p.config, withTmpIfNeeded(p, a, needsTmp))
+    if n.kind in {nkCharLit..nkNilLit}:
+      result = addrLoc(p.config, literalsNeedsTmp(p, a))
+    else:
+      result = addrLoc(p.config, withTmpIfNeeded(p, a, needsTmp))
   elif p.module.compileToCpp and param.typ.kind in {tyVar} and
       n.kind == nkHiddenAddr:
     initLocExprSingleUse(p, n[0], a)
@@ -256,6 +296,7 @@ proc genArg(p: BProc, n: PNode, param: PSym; call: PNode, needsTmp = false): Rop
   else:
     initLocExprSingleUse(p, n, a)
     result = rdLoc(withTmpIfNeeded(p, a, needsTmp))
+  #assert result != nil
 
 proc genArgNoParam(p: BProc, n: PNode, needsTmp = false): Rope =
   var a: TLoc
@@ -265,47 +306,59 @@ proc genArgNoParam(p: BProc, n: PNode, needsTmp = false): Rope =
     initLocExprSingleUse(p, n, a)
     result = rdLoc(withTmpIfNeeded(p, a, needsTmp))
 
-from dfa import instrTargets, InstrTargetKind
+from dfa import aliases, AliasKind
 
 proc potentialAlias(n: PNode, potentialWrites: seq[PNode]): bool =
   for p in potentialWrites:
-    if instrTargets(p, n) != None:
+    if p.aliases(n) != no or n.aliases(p) != no:
       return true
 
 proc skipTrivialIndirections(n: PNode): PNode =
   result = n
   while true:
     case result.kind
-    of {nkDerefExpr, nkHiddenDeref, nkAddr, nkHiddenAddr, nkObjDownConv, nkObjUpConv}:
+    of nkDerefExpr, nkHiddenDeref, nkAddr, nkHiddenAddr, nkObjDownConv, nkObjUpConv:
       result = result[0]
-    of {nkHiddenStdConv, nkHiddenSubConv}:
+    of nkHiddenStdConv, nkHiddenSubConv:
       result = result[1]
     else: break
 
-proc getPotentialWrites(n: PNode, mutate = false): seq[PNode] =
+proc getPotentialWrites(n: PNode; mutate: bool; result: var seq[PNode]) =
   case n.kind:
-  of nkLiterals, nkIdent: discard
+  of nkLiterals, nkIdent, nkFormalParams: discard
   of nkSym:
     if mutate: result.add n
   of nkAsgn, nkFastAsgn:
-    result.add getPotentialWrites(n[0], true)
-    result.add getPotentialWrites(n[1], mutate)
+    getPotentialWrites(n[0], true, result)
+    getPotentialWrites(n[1], mutate, result)
   of nkAddr, nkHiddenAddr:
-    result.add getPotentialWrites(n[0], true)
-  of nkCallKinds: #TODO: Find out why in f += 1, f is a nkSym and not a nkHiddenAddr
-    for s in n.sons:
-      result.add getPotentialWrites(s, true)
+    getPotentialWrites(n[0], true, result)
+  of nkBracketExpr, nkDotExpr, nkCheckedFieldExpr:
+    getPotentialWrites(n[0], mutate, result)
+  of nkCallKinds:
+    case n.getMagic:
+    of mIncl, mExcl, mInc, mDec, mAppendStrCh, mAppendStrStr, mAppendSeqElem,
+        mAddr, mNew, mNewFinalize, mWasMoved, mDestroy, mReset:
+      getPotentialWrites(n[1], true, result)
+      for i in 2..<n.len:
+        getPotentialWrites(n[i], mutate, result)
+    of mSwap:
+      for i in 1..<n.len:
+        getPotentialWrites(n[i], true, result)
+    else:
+      for i in 1..<n.len:
+        getPotentialWrites(n[i], mutate, result)
   else:
-    for s in n.sons:
-      result.add getPotentialWrites(s, mutate)
+    for s in n:
+      getPotentialWrites(s, mutate, result)
 
-proc getPotentialReads(n: PNode): seq[PNode] =
+proc getPotentialReads(n: PNode; result: var seq[PNode]) =
   case n.kind:
-  of nkLiterals, nkIdent: discard
+  of nkLiterals, nkIdent, nkFormalParams: discard
   of nkSym: result.add n
   else:
-    for s in n.sons:
-      result.add getPotentialReads(s)
+    for s in n:
+      getPotentialReads(s, result)
 
 proc genParams(p: BProc, ri: PNode, typ: PType): Rope =
   # We must generate temporaries in cases like #14396
@@ -316,10 +369,13 @@ proc genParams(p: BProc, ri: PNode, typ: PType): Rope =
     if ri[i].skipTrivialIndirections.kind == nkSym:
       needTmp[i - 1] = potentialAlias(ri[i], potentialWrites)
     else:
-      for n in getPotentialReads(ri[i]):
+      #if not ri[i].typ.isCompileTimeOnly:
+      var potentialReads: seq[PNode]
+      getPotentialReads(ri[i], potentialReads)
+      for n in potentialReads:
         if not needTmp[i - 1]:
           needTmp[i - 1] = potentialAlias(n, potentialWrites)
-      potentialWrites.add getPotentialWrites(ri[i])
+      getPotentialWrites(ri[i], false, potentialWrites)
     if ri[i].kind == nkHiddenAddr:
       # Optimization: don't use a temp, if we would only take the adress anyway
       needTmp[i - 1] = false
@@ -383,7 +439,7 @@ proc genClosureCall(p: BProc, le, ri: PNode, d: var TLoc) =
   let rawProc = getClosureType(p.module, typ, clHalf)
   let canRaise = p.config.exc == excGoto and canRaiseDisp(p, ri[0])
   if typ[0] != nil:
-    if isInvalidReturnType(p.config, typ[0]):
+    if isInvalidReturnType(p.config, typ):
       if ri.len > 1: pl.add(~", ")
       # beware of 'result = p(result)'. We may need to allocate a temporary:
       if d.k in {locTemp, locNone} or not preventNrvo(p, le, ri):
@@ -681,7 +737,7 @@ proc genNamedParamCall(p: BProc, ri: PNode, d: var TLoc) =
     pl.add(~": ")
     pl.add(genArg(p, ri[i], param, ri))
   if typ[0] != nil:
-    if isInvalidReturnType(p.config, typ[0]):
+    if isInvalidReturnType(p.config, typ):
       if ri.len > 1: pl.add(~" ")
       # beware of 'result = p(result)'. We always allocate a temporary:
       if d.k in {locTemp, locNone}:
@@ -745,6 +801,5 @@ proc genAsgnCall(p: BProc, le, ri: PNode, d: var TLoc) =
     genNamedParamCall(p, ri, d)
   else:
     genPrefixCall(p, le, ri, d)
-  postStmtActions(p)
 
 proc genCall(p: BProc, e: PNode, d: var TLoc) = genAsgnCall(p, nil, e, d)

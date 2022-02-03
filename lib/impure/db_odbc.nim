@@ -22,8 +22,8 @@
 ## Parameter substitution
 ## ======================
 ##
-## All ``db_*`` modules support the same form of parameter substitution.
-## That is, using the ``?`` (question mark) to signify the place where a
+## All `db_*` modules support the same form of parameter substitution.
+## That is, using the `?` (question mark) to signify the place where a
 ## value should be placed. For example:
 ##
 ## .. code-block:: Nim
@@ -37,7 +37,7 @@
 ## ----------------------------------
 ##
 ## .. code-block:: Nim
-##     import db_odbc
+##     import std/db_odbc
 ##     var db = open("localhost", "user", "password", "dbname")
 ##     db.close()
 ##
@@ -62,7 +62,7 @@
 ##
 ## .. code-block:: Nim
 ##
-##  import db_odbc, math
+##  import std/[db_odbc, math]
 ##
 ##  var theDb = open("localhost", "nim", "nim", "test")
 ##
@@ -168,7 +168,7 @@ proc dbError*(db: var DbConn) {.
     raise e
 
 proc sqlCheck(db: var DbConn, resVal: TSqlSmallInt) {.raises: [DbError]} =
-  ## Wrapper that raises [EDb] if ``resVal`` is neither SQL_SUCCESS or SQL_NO_DATA
+  ## Wrapper that raises [EDb] if `resVal` is neither SQL_SUCCESS or SQL_NO_DATA
   if resVal notIn [SQL_SUCCESS, SQL_NO_DATA]: dbError(db)
 
 proc sqlGetDBMS(db: var DbConn): string {.
@@ -195,7 +195,7 @@ proc dbQuote*(s: string): string {.noSideEffect.} =
 
 proc dbFormat(formatstr: SqlQuery, args: varargs[string]): string {.
                   noSideEffect.} =
-  ## Replace any ``?`` placeholders with `args`,
+  ## Replace any `?` placeholders with `args`,
   ## and quotes the arguments
   result = ""
   var a = 0
@@ -279,7 +279,7 @@ iterator fastRows*(db: var DbConn, query: SqlQuery,
   ## Rows are retrieved from the server at each iteration.
   var
     rowRes: Row
-    sz: TSqlInteger = 0
+    sz: TSqlLen = 0
     cCnt: TSqlSmallInt = 0
     res: TSqlSmallInt = 0
   res = db.prepareFetch(query, args)
@@ -293,8 +293,7 @@ iterator fastRows*(db: var DbConn, query: SqlQuery,
       for colId in 1..cCnt:
         buf[0] = '\0'
         db.sqlCheck(SQLGetData(db.stmt, colId.SqlUSmallInt, SQL_C_CHAR,
-                                 cast[cstring](buf.addr), 4095.TSqlSmallInt,
-                                 sz.addr))
+                                 cast[cstring](buf.addr), 4095, sz.addr))
         rowRes[colId-1] = $(addr buf)
       yield rowRes
       res = SQLFetch(db.stmt)
@@ -308,7 +307,7 @@ iterator instantRows*(db: var DbConn, query: SqlQuery,
   ## on demand using []. Returned handle is valid only within the iterator body.
   var
     rowRes: Row = @[]
-    sz: TSqlInteger = 0
+    sz: TSqlLen = 0
     cCnt: TSqlSmallInt = 0
     res: TSqlSmallInt = 0
   res = db.prepareFetch(query, args)
@@ -322,8 +321,7 @@ iterator instantRows*(db: var DbConn, query: SqlQuery,
       for colId in 1..cCnt:
         buf[0] = '\0'
         db.sqlCheck(SQLGetData(db.stmt, colId.SqlUSmallInt, SQL_C_CHAR,
-                                 cast[cstring](buf.addr), 4095.TSqlSmallInt,
-                                 sz.addr))
+                                 cast[cstring](buf.addr), 4095, sz.addr))
         rowRes[colId-1] = $(addr buf)
       yield (row: rowRes, len: cCnt.int)
       res = SQLFetch(db.stmt)
@@ -349,7 +347,7 @@ proc getRow*(db: var DbConn, query: SqlQuery,
   ## will return a Row with empty strings for each column.
   var
     rowRes: Row
-    sz: TSqlInteger = 0
+    sz: TSqlLen = 0
     cCnt: TSqlSmallInt = 0
     res: TSqlSmallInt = 0
   res = db.prepareFetch(query, args)
@@ -362,8 +360,7 @@ proc getRow*(db: var DbConn, query: SqlQuery,
     for colId in 1..cCnt:
       buf[0] = '\0'
       db.sqlCheck(SQLGetData(db.stmt, colId.SqlUSmallInt, SQL_C_CHAR,
-                               cast[cstring](buf.addr), 4095.TSqlSmallInt,
-                               sz.addr))
+                               cast[cstring](buf.addr), 4095, sz.addr))
       rowRes[colId-1] = $(addr buf)
     res = SQLFetch(db.stmt)
     result = rowRes
@@ -377,7 +374,7 @@ proc getAllRows*(db: var DbConn, query: SqlQuery,
   var
     rows: seq[Row] = @[]
     rowRes: Row
-    sz: TSqlInteger = 0
+    sz: TSqlLen = 0
     cCnt: TSqlSmallInt = 0
     res: TSqlSmallInt = 0
   res = db.prepareFetch(query, args)
@@ -391,8 +388,7 @@ proc getAllRows*(db: var DbConn, query: SqlQuery,
       for colId in 1..cCnt:
         buf[0] = '\0'
         db.sqlCheck(SQLGetData(db.stmt, colId.SqlUSmallInt, SQL_C_CHAR,
-                                 cast[cstring](buf.addr), 4095.TSqlSmallInt,
-                                 sz.addr))
+                                 cast[cstring](buf.addr), 4095, sz.addr))
         rowRes[colId-1] = $(addr buf)
       rows.add(rowRes)
       res = SQLFetch(db.stmt)
@@ -502,7 +498,7 @@ proc open*(connection, user, password, database: string): DbConn {.
   ## Raises `EDb` if the connection could not be established.
   ##
   ## Currently the database parameter is ignored,
-  ## but included to match ``open()`` in the other db_xxxxx library modules.
+  ## but included to match `open()` in the other db_xxxxx library modules.
   var
     val = SQL_OV_ODBC3
     resLen = 0
@@ -512,7 +508,7 @@ proc open*(connection, user, password, database: string): DbConn {.
   if res != SQL_SUCCESS: dbError("Error: unable to initialise ODBC environment.")
   res = SQLSetEnvAttr(result.env,
                       SQL_ATTR_ODBC_VERSION.TSqlInteger,
-                      cast[SqlPointer](val.addr), resLen.TSqlInteger)
+                      cast[SqlPointer](val), resLen.TSqlInteger)
   if res != SQL_SUCCESS: dbError("Error: unable to set ODBC driver version.")
   # allocate hDb handle
   res = SQLAllocHandle(SQL_HANDLE_DBC, result.env, result.hDb)

@@ -1,3 +1,5 @@
+# xxx consider merging this in tests/stdlib/tos.nim for increased coverage (with selecting disabling)
+
 static: doAssert defined(nodejs)
 
 import os

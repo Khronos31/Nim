@@ -10,7 +10,7 @@
 ## This module contains the ``TMsgKind`` enum as well as the
 ## ``TLineInfo`` object.
 
-import ropes, tables, pathutils
+import ropes, tables, pathutils, hashes
 
 const
   explanationsBaseUrl* = "https://nim-lang.github.io/Nim"
@@ -27,59 +27,91 @@ proc createDocLink*(urlSuffix: string): string =
 
 type
   TMsgKind* = enum
-    errUnknown, errInternal, errIllFormedAstX, errCannotOpenFile,
+    # fatal errors
+    errUnknown, errFatal, errInternal,
+    # non-fatal errors
+    errIllFormedAstX, errCannotOpenFile,
     errXExpected,
-    errGridTableNotImplemented,
-    errGeneralParseError,
-    errNewSectionExpected,
-    errInvalidDirectiveX,
+    errRstGridTableNotImplemented,
+    errRstMarkdownIllformedTable,
+    errRstNewSectionExpected,
+    errRstGeneralParseError,
+    errRstInvalidDirectiveX,
+    errRstInvalidField,
+    errRstFootnoteMismatch,
+    errRstSandboxedDirective,
     errProveInit, # deadcode
     errGenerated,
     errUser,
-    warnCannotOpenFile,
-    warnOctalEscape, warnXIsNeverRead, warnXmightNotBeenInit,
-    warnDeprecated, warnConfigDeprecated,
-    warnSmallLshouldNotBeUsed, warnUnknownMagic, warnRedefinitionOfLabel,
-    warnUnknownSubstitutionX, warnLanguageXNotSupported,
-    warnFieldXNotSupported, warnCommentXIgnored,
-    warnTypelessParam,
-    warnUseBase, warnWriteToForeignHeap, warnUnsafeCode,
-    warnUnusedImportX,
-    warnInheritFromException,
-    warnEachIdentIsTuple,
-    warnUnsafeSetLen,
-    warnUnsafeDefault,
-    warnProveInit, warnProveField, warnProveIndex,
-    warnUnreachableElse, warnUnreachableCode,
-    warnStaticIndexCheck, warnGcUnsafe, warnGcUnsafe2,
-    warnUninit, warnGcMem, warnDestructor, warnLockLevel, warnResultShadowed,
-    warnInconsistentSpacing, warnCaseTransition, warnCycleCreated,
-    warnObservableStores,
-    warnUser,
-    hintSuccess, hintSuccessX, hintCC,
-    hintLineTooLong, hintXDeclaredButNotUsed,
-    hintConvToBaseNotNeeded,
-    hintConvFromXtoItselfNotNeeded, hintExprAlwaysX, hintQuitCalled,
-    hintProcessing, hintCodeBegin, hintCodeEnd, hintConf, hintPath,
-    hintConditionAlwaysTrue, hintConditionAlwaysFalse, hintName, hintPattern,
-    hintExecuting, hintLinking, hintDependency,
-    hintSource, hintPerformance, hintStackTrace, hintGCStats,
-    hintGlobalVar, hintExpandMacro,
-    hintUser, hintUserRaw,
-    hintExtendedContext,
-    hintMsgOrigin, # since 1.3.5
+    # warnings
+    warnCannotOpenFile = "CannotOpenFile", warnOctalEscape = "OctalEscape",
+    warnXIsNeverRead = "XIsNeverRead", warnXmightNotBeenInit = "XmightNotBeenInit",
+    warnDeprecated = "Deprecated", warnConfigDeprecated = "ConfigDeprecated",
+    warnDotLikeOps = "DotLikeOps",
+    warnSmallLshouldNotBeUsed = "SmallLshouldNotBeUsed", warnUnknownMagic = "UnknownMagic",
+    warnRstRedefinitionOfLabel = "RedefinitionOfLabel",
+    warnRstUnknownSubstitutionX = "UnknownSubstitutionX",
+    warnRstAmbiguousLink = "AmbiguousLink",
+    warnRstBrokenLink = "BrokenLink",
+    warnRstLanguageXNotSupported = "LanguageXNotSupported",
+    warnRstFieldXNotSupported = "FieldXNotSupported",
+    warnRstStyle = "warnRstStyle",
+    warnCommentXIgnored = "CommentXIgnored",
+    warnTypelessParam = "TypelessParam",
+    warnUseBase = "UseBase", warnWriteToForeignHeap = "WriteToForeignHeap",
+    warnUnsafeCode = "UnsafeCode", warnUnusedImportX = "UnusedImport",
+    warnInheritFromException = "InheritFromException", warnEachIdentIsTuple = "EachIdentIsTuple",
+    warnUnsafeSetLen = "UnsafeSetLen", warnUnsafeDefault = "UnsafeDefault",
+    warnProveInit = "ProveInit", warnProveField = "ProveField", warnProveIndex = "ProveIndex",
+    warnUnreachableElse = "UnreachableElse", warnUnreachableCode = "UnreachableCode",
+    warnStaticIndexCheck = "IndexCheck", warnGcUnsafe = "GcUnsafe", warnGcUnsafe2 = "GcUnsafe2",
+    warnUninit = "Uninit", warnGcMem = "GcMem", warnDestructor = "Destructor",
+    warnLockLevel = "LockLevel", warnResultShadowed = "ResultShadowed",
+    warnInconsistentSpacing = "Spacing",  warnCaseTransition = "CaseTransition",
+    warnCycleCreated = "CycleCreated", warnObservableStores = "ObservableStores",
+    warnStrictNotNil = "StrictNotNil",
+    warnResultUsed = "ResultUsed",
+    warnCannotOpen = "CannotOpen",
+    warnFileChanged = "FileChanged",
+    warnSuspiciousEnumConv = "EnumConv",
+    warnAnyEnumConv = "AnyEnumConv",
+    warnHoleEnumConv = "HoleEnumConv",
+    warnCstringConv = "CStringConv",
+    warnEffect = "Effect",
+    warnUser = "User",
+    # hints
+    hintSuccess = "Success", hintSuccessX = "SuccessX",
+    hintCC = "CC",
+    hintLineTooLong = "LineTooLong",
+    hintXDeclaredButNotUsed = "XDeclaredButNotUsed", hintDuplicateModuleImport = "DuplicateModuleImport",
+    hintXCannotRaiseY = "XCannotRaiseY", hintConvToBaseNotNeeded = "ConvToBaseNotNeeded",
+    hintConvFromXtoItselfNotNeeded = "ConvFromXtoItselfNotNeeded", hintExprAlwaysX = "ExprAlwaysX",
+    hintQuitCalled = "QuitCalled", hintProcessing = "Processing", hintProcessingStmt = "ProcessingStmt", hintCodeBegin = "CodeBegin",
+    hintCodeEnd = "CodeEnd", hintConf = "Conf", hintPath = "Path",
+    hintConditionAlwaysTrue = "CondTrue", hintConditionAlwaysFalse = "CondFalse", hintName = "Name",
+    hintPattern = "Pattern", hintExecuting = "Exec", hintLinking = "Link", hintDependency = "Dependency",
+    hintSource = "Source", hintPerformance = "Performance", hintStackTrace = "StackTrace",
+    hintGCStats = "GCStats", hintGlobalVar = "GlobalVar", hintExpandMacro = "ExpandMacro",
+    hintUser = "User", hintUserRaw = "UserRaw", hintExtendedContext = "ExtendedContext",
+    hintMsgOrigin = "MsgOrigin", # since 1.3.5
+    hintDeclaredLoc = "DeclaredLoc", # since 1.5.1
 
 const
   MsgKindToStr*: array[TMsgKind, string] = [
     errUnknown: "unknown error",
+    errFatal: "fatal error: $1",
     errInternal: "internal error: $1",
     errIllFormedAstX: "illformed AST: $1",
     errCannotOpenFile: "cannot open '$1'",
     errXExpected: "'$1' expected",
-    errGridTableNotImplemented: "grid table is not implemented",
-    errGeneralParseError: "general parse error",
-    errNewSectionExpected: "new section expected",
-    errInvalidDirectiveX: "invalid directive: '$1'",
+    errRstGridTableNotImplemented: "grid table is not implemented",
+    errRstMarkdownIllformedTable: "illformed delimiter row of a markdown table",
+    errRstNewSectionExpected: "new section expected $1",
+    errRstGeneralParseError: "general parse error",
+    errRstInvalidDirectiveX: "invalid directive: '$1'",
+    errRstInvalidField: "invalid field: $1",
+    errRstFootnoteMismatch: "number of footnotes and their references don't match: $1",
+    errRstSandboxedDirective: "disabled directive: '$1'",
     errProveInit: "Cannot prove that '$1' is initialized.",  # deadcode
     errGenerated: "$1",
     errUser: "$1",
@@ -89,14 +121,18 @@ const
     warnXmightNotBeenInit: "'$1' might not have been initialized",
     warnDeprecated: "$1",
     warnConfigDeprecated: "config file '$1' is deprecated",
+    warnDotLikeOps: "$1",
     warnSmallLshouldNotBeUsed: "'l' should not be used as an identifier; may look like '1' (one)",
     warnUnknownMagic: "unknown magic '$1' might crash the compiler",
-    warnRedefinitionOfLabel: "redefinition of label '$1'",
-    warnUnknownSubstitutionX: "unknown substitution '$1'",
-    warnLanguageXNotSupported: "language '$1' not supported",
-    warnFieldXNotSupported: "field '$1' not supported",
+    warnRstRedefinitionOfLabel: "redefinition of label '$1'",
+    warnRstUnknownSubstitutionX: "unknown substitution '$1'",
+    warnRstAmbiguousLink: "ambiguous doc link $1",
+    warnRstBrokenLink: "broken link '$1'",
+    warnRstLanguageXNotSupported: "language '$1' not supported",
+    warnRstFieldXNotSupported: "field '$1' not supported",
+    warnRstStyle: "RST style: $1",
     warnCommentXIgnored: "comment '$1' ignored",
-    warnTypelessParam: "'$1' has no type. Typeless parameters are deprecated; only allowed for 'template'",
+    warnTypelessParam: "", # deadcode
     warnUseBase: "use {.base.} for base methods; baseless methods are deprecated",
     warnWriteToForeignHeap: "write to foreign heap",
     warnUnsafeCode: "unsafe code: '$1'",
@@ -124,18 +160,30 @@ const
     warnCaseTransition: "Potential object case transition, instantiate new object instead",
     warnCycleCreated: "$1",
     warnObservableStores: "observable stores to '$1'",
+    warnStrictNotNil: "$1",
+    warnResultUsed: "used 'result' variable",
+    warnCannotOpen: "cannot open: $1",
+    warnFileChanged: "file changed: $1",
+    warnSuspiciousEnumConv: "$1",
+    warnAnyEnumConv: "$1",
+    warnHoleEnumConv: "$1",
+    warnCstringConv: "$1",
+    warnEffect: "$1",
     warnUser: "$1",
     hintSuccess: "operation successful: $#",
     # keep in sync with `testament.isSuccess`
-    hintSuccessX: "${loc} lines; ${sec}s; $mem; $build build; proj: $project; out: $output",
+    hintSuccessX: "$build\n$loc lines; ${sec}s; $mem; proj: $project; out: $output",
     hintCC: "CC: $1",
     hintLineTooLong: "line too long",
     hintXDeclaredButNotUsed: "'$1' is declared but not used",
+    hintDuplicateModuleImport: "$1",
+    hintXCannotRaiseY: "$1",
     hintConvToBaseNotNeeded: "conversion to base object is not needed",
     hintConvFromXtoItselfNotNeeded: "conversion from $1 to itself is pointless",
     hintExprAlwaysX: "expression evaluates always to '$1'",
     hintQuitCalled: "quit() called",
     hintProcessing: "$1",
+    hintProcessingStmt: "$1",
     hintCodeBegin: "generated code listing:",
     hintCodeEnd: "end of listing",
     hintConf: "used config file '$1'",
@@ -157,66 +205,29 @@ const
     hintUserRaw: "$1",
     hintExtendedContext: "$1",
     hintMsgOrigin: "$1",
+    hintDeclaredLoc: "$1",
   ]
 
 const
-  WarningsToStr* = ["CannotOpenFile", "OctalEscape",
-    "XIsNeverRead", "XmightNotBeenInit",
-    "Deprecated", "ConfigDeprecated",
-    "SmallLshouldNotBeUsed", "UnknownMagic",
-    "RedefinitionOfLabel", "UnknownSubstitutionX",
-    "LanguageXNotSupported", "FieldXNotSupported",
-    "CommentXIgnored",
-    "TypelessParam", "UseBase", "WriteToForeignHeap",
-    "UnsafeCode", "UnusedImport", "InheritFromException",
-    "EachIdentIsTuple",
-    "UnsafeSetLen", "UnsafeDefault",
-    "ProveInit", "ProveField", "ProveIndex", "UnreachableElse", "UnreachableCode",
-    "IndexCheck", "GcUnsafe", "GcUnsafe2", "Uninit",
-    "GcMem", "Destructor", "LockLevel", "ResultShadowed",
-    "Spacing", "CaseTransition", "CycleCreated",
-    "ObservableStores", "User"]
-
-  HintsToStr* = [
-    "Success", "SuccessX", "CC", "LineTooLong",
-    "XDeclaredButNotUsed",
-    "ConvToBaseNotNeeded", "ConvFromXtoItselfNotNeeded",
-    "ExprAlwaysX", "QuitCalled", "Processing", "CodeBegin", "CodeEnd", "Conf",
-    "Path", "CondTrue", "CondFalse", "Name", "Pattern", "Exec", "Link", "Dependency",
-    "Source", "Performance", "StackTrace", "GCStats", "GlobalVar", "ExpandMacro",
-    "User", "UserRaw", "ExtendedContext", "MsgOrigin",
-  ]
-
-const
-  fatalMin* = errUnknown
-  fatalMax* = errInternal
+  fatalMsgs* = {errUnknown..errInternal}
   errMin* = errUnknown
   errMax* = errUser
   warnMin* = warnCannotOpenFile
   warnMax* = pred(hintSuccess)
   hintMin* = hintSuccess
   hintMax* = high(TMsgKind)
-
-proc msgToStr*(msg: TMsgKind): string =
-  case msg
-  of warnMin..warnMax: WarningsToStr[ord(msg) - ord(warnMin)]
-  of hintMin..hintMax: HintsToStr[ord(msg) - ord(hintMin)]
-  else: "" # we could at least do $msg - prefix `err`
-
-static:
-  doAssert HintsToStr.len == ord(hintMax) - ord(hintMin) + 1
-  doAssert WarningsToStr.len == ord(warnMax) - ord(warnMin) + 1
+  rstWarnings* = {warnRstRedefinitionOfLabel..warnRstStyle}
 
 type
   TNoteKind* = range[warnMin..hintMax] # "notes" are warnings or hints
   TNoteKinds* = set[TNoteKind]
 
 proc computeNotesVerbosity(): array[0..3, TNoteKinds] =
-  result[3] = {low(TNoteKind)..high(TNoteKind)} - {}
-  result[2] = result[3] - {hintStackTrace, warnUninit, hintExtendedContext}
+  result[3] = {low(TNoteKind)..high(TNoteKind)} - {warnObservableStores, warnResultUsed, warnAnyEnumConv}
+  result[2] = result[3] - {hintStackTrace, warnUninit, hintExtendedContext, hintDeclaredLoc, hintProcessingStmt}
   result[1] = result[2] - {warnProveField, warnProveIndex,
     warnGcUnsafe, hintPath, hintDependency, hintCodeBegin, hintCodeEnd,
-    hintSource, hintGlobalVar, hintGCStats, hintMsgOrigin}
+    hintSource, hintGlobalVar, hintGCStats, hintMsgOrigin, hintPerformance}
   result[0] = result[1] - {hintSuccessX, hintSuccess, hintConf,
     hintProcessing, hintPattern, hintExecuting, hintLinking, hintCC}
 
@@ -271,6 +282,9 @@ type
 
 proc `==`*(a, b: FileIndex): bool {.borrow.}
 
+proc hash*(i: TLineInfo): Hash =
+  hash (i.line.int, i.col.int, i.fileIndex.int)
+
 proc raiseRecoverableError*(msg: string) {.noinline.} =
   raise newException(ERecoverableError, msg)
 
@@ -307,3 +321,4 @@ proc initMsgConfig*(): MsgConfig =
   result.filenameToIndexTbl = initTable[string, FileIndex]()
   result.fileInfos = @[]
   result.errorOutputs = {eStdOut, eStdErr}
+  result.filenameToIndexTbl["???"] = FileIndex(-1)

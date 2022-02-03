@@ -1,6 +1,6 @@
 #
 #
-#           The Nim Compiler
+#            Nim's Runtime Library
 #        (c) Copyright 2009 Andreas Rumpf
 #
 #    See the file "copying.txt", included in this
@@ -33,7 +33,7 @@ type
     lineNumber*: int             ## the current line number
     sentinel: int
     lineStart: int               # index of last line start in buffer
-    offsetBase*: int             # use ``offsetBase + bufpos`` to get the offset
+    offsetBase*: int             # use `offsetBase + bufpos` to get the offset
     refillChars: set[char]
 
 proc close*(L: var BaseLexer) =

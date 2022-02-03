@@ -267,6 +267,17 @@ var
 
 template normalize(x: cstring): cstring = x.toLower.replace("_", "")
 
+proc escapeCString(x: var cstring) =
+  # Original strings are already escaped except HTML tags, so
+  # we only escape `<` and `>`.
+  var s = ""
+  for c in x:
+    case c
+    of '<': s.add("&lt;")
+    of '>': s.add("&gt;")
+    else: s.add(c)
+  x = s.cstring
+
 proc dosearch(value: cstring): Element =
   if db.len == 0:
     var stuff: Element
@@ -305,6 +316,7 @@ proc dosearch(value: cstring): Element =
   matches.sort(proc(a, b: auto): int = b[1] - a[1])
   for i in 0 ..< min(matches.len, 29):
     matches[i][0].innerHTML = matches[i][0].getAttribute("data-doc-search-tag")
+    escapeCString(matches[i][0].innerHTML)
     ul.add(tree("LI", cast[Element](matches[i][0])))
   if ul.len == 0:
     result.add tree("B", text"no search results")
@@ -329,3 +341,60 @@ proc search*() {.exportc.} =
 
   if timer != nil: clearTimeout(timer)
   timer = setTimeout(wrapper, 400)
+
+proc copyToClipboard*() {.exportc.} =
+    {.emit: """
+
+    function updatePreTags() {
+
+      const allPreTags = document.querySelectorAll("pre")
+    
+      allPreTags.forEach((e) => {
+      
+          const div = document.createElement("div")
+          div.classList.add("copyToClipBoard")
+    
+          const preTag = document.createElement("pre")
+          preTag.innerHTML = e.innerHTML
+    
+          const button = document.createElement("button")
+          button.value = e.textContent.replace('...', '') 
+          button.classList.add("copyToClipBoardBtn")
+          button.style = "cursor: pointer"
+    
+          div.appendChild(preTag)
+          div.appendChild(button)
+    
+          e.outerHTML = div.outerHTML
+      
+      })
+    }
+
+
+    function copyTextToClipboard(e) {
+        const clipBoardContent = e.target.value
+        navigator.clipboard.writeText(clipBoardContent).then(function() {
+            e.target.style.setProperty("--clipboard-image", "var(--clipboard-image-selected)")
+        }, function(err) {
+            console.error("Could not copy text: ", err);
+        });
+    }
+
+    window.addEventListener("click", (e) => {
+        if (e.target.classList.contains("copyToClipBoardBtn")) {
+            copyTextToClipboard(e)
+          }
+    })
+
+    window.addEventListener("mouseover", (e) => {
+        if (e.target.nodeName === "PRE") {
+            e.target.nextElementSibling.style.setProperty("--clipboard-image", "var(--clipboard-image-normal)")
+        }
+    })
+    
+    window.addEventListener("DOMContentLoaded", updatePreTags)
+
+    """
+    .}
+    
+copyToClipboard()

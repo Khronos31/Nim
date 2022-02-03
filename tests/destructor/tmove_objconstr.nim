@@ -2,14 +2,13 @@
 discard """
 output:  '''test created
 test destroyed 0
-Pony is dying!
 1
 2
 3
 4
 Pony is dying!'''
 joinable: false
-target: "C"
+targets: "c"
 """
 
 # bug #4214
@@ -113,7 +112,7 @@ proc myfunc2(x, y: int): tuple[a: MySeqNonCopyable, b:int, c:MySeqNonCopyable] =
   var cc = newMySeq(y, 5.0)
   (a: case x:
     of 1:
-      let (z1, z2) = myfunc(x,y)
+      let (z1, z2) = myfunc(x, y)
       z2
     elif x > 5: raise newException(ValueError, "new error")
     else: newMySeq(x, 1.0),
@@ -179,7 +178,7 @@ proc myfuncLoop(x: int): MySeqNonCopyable =
 discard myfuncLoop(3)
 
 #------------------------------------------------------------
-# Move into table via openarray
+# Move into table via openArray
 #------------------------------------------------------------
 
 type

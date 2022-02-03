@@ -27,6 +27,8 @@ end
 9014
 9016
 9018
+@[1, 2]
+@[1, 2, 3]
 '''
 """
 
@@ -133,7 +135,7 @@ block t3837_chained:
 
 
 block t3221_complex:
-  iterator permutations[T](ys: openarray[T]): seq[T] =
+  iterator permutations[T](ys: openArray[T]): seq[T] =
     var
       d = 1
       c = newSeq[int](ys.len)
@@ -191,7 +193,7 @@ block t3499_keepstate:
       break
 
   # bug #3499 last snippet fixed
-  # bug 705  last snippet fixed
+  # bug #705  last snippet fixed
 
 
 
@@ -225,8 +227,8 @@ block t2023_objiter:
 
 
 block:
-  # issue #13739
-  iterator myIter(arg: openarray[int]): int =
+  # bug #13739
+  iterator myIter(arg: openArray[int]): int =
     var tmp = 0
     let len = arg.len
     while tmp < len:
@@ -240,3 +242,12 @@ block:
       echo x
 
   someProc()
+
+block:
+  # bug #12576
+  iterator ff(sq: varargs[seq[int]]): int =
+    for x in sq:
+      echo x
+
+  for x in ff(@[1, 2], @[1, 2, 3]):
+    echo x

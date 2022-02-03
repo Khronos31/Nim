@@ -55,7 +55,7 @@ when hasThreadSupport:
       maxFD: int
       numFD: int
       fds: ptr SharedArray[SelectorKey[T]]
-      count: int
+      count*: int
     Selector*[T] = ptr SelectorImpl[T]
 else:
   type
@@ -64,7 +64,7 @@ else:
       maxFD: int
       numFD: int
       fds: seq[SelectorKey[T]]
-      count: int
+      count*: int
     Selector*[T] = ref SelectorImpl[T]
 type
   SelectEventImpl = object
@@ -73,10 +73,7 @@ type
 
 proc newSelector*[T](): Selector[T] =
   # Retrieve the maximum fd count (for current OS) via getrlimit()
-  var a = RLimit()
-  if getrlimit(posix.RLIMIT_NOFILE, a) != 0:
-    raiseOSError(osLastError())
-  var maxFD = int(a.rlim_max)
+  var maxFD = maxDescriptors()
   doAssert(maxFD > 0)
   # Start with a reasonable size, checkFd() will grow this on demand
   const numFD = 1024
@@ -514,7 +511,7 @@ template withData*[T](s: Selector[T], fd: SocketHandle|int, value,
   let fdi = int(fd)
   s.checkFd(fdi)
   if fdi in s:
-    var value = addr(s.getData(fdi))
+    var value = addr(s.fds[fdi].data)
     body
 
 template withData*[T](s: Selector[T], fd: SocketHandle|int, value, body1,
@@ -523,7 +520,7 @@ template withData*[T](s: Selector[T], fd: SocketHandle|int, value, body1,
   let fdi = int(fd)
   s.checkFd(fdi)
   if fdi in s:
-    var value = addr(s.getData(fdi))
+    var value = addr(s.fds[fdi].data)
     body1
   else:
     body2

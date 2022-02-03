@@ -10,7 +10,7 @@
 ## Declaration of the Document Object Model for the `JavaScript backend
 ## <backends.html#backends-the-javascript-target>`_.
 import std/private/since
-when not defined(js) and not defined(Nimdoc):
+when not defined(js):
   {.error: "This module only works on the JavaScript platform".}
 
 const
@@ -37,6 +37,7 @@ type
     onmouseup*: proc (event: Event) {.closure.}
     onreset*: proc (event: Event) {.closure.}
     onselect*: proc (event: Event) {.closure.}
+    onstorage*: proc (event: Event) {.closure.}
     onsubmit*: proc (event: Event) {.closure.}
     onunload*: proc (event: Event) {.closure.}
     onloadstart*: proc (event: Event) {.closure.}
@@ -72,6 +73,7 @@ type
     Resize = "resize",
     Scroll = "scroll",
     Select = "select",
+    Storage = "storage",
     Unload = "unload",
     Wheel = "wheel"
 
@@ -106,7 +108,17 @@ type
     memory*: PerformanceMemory
     timing*: PerformanceTiming
 
-  Selection* {.importc.} = ref object ## see `docs<https://developer.mozilla.org/en-US/docs/Web/API/Selection>`_
+  Range* {.importc.} = ref object
+    ## see `docs<https://developer.mozilla.org/en-US/docs/Web/API/Range>`_
+    collapsed*: bool
+    commonAncestorContainer*: Node
+    endContainer*: Node
+    endOffset*: int
+    startContainer*: Node
+    startOffset*: int
+
+  Selection* {.importc.} = ref object
+    ## see `docs<https://developer.mozilla.org/en-US/docs/Web/API/Selection>`_
     anchorNode*: Node
     anchorOffset*: int
     focusNode*: Node
@@ -115,7 +127,7 @@ type
     rangeCount*: int
     `type`*: cstring
 
-  LocalStorage* {.importc.} = ref object
+  Storage* {.importc.} = ref object
 
   Window* = ref WindowObj
   WindowObj {.importc.} = object of EventTargetObj
@@ -143,7 +155,9 @@ type
     screen*: Screen
     performance*: Performance
     onpopstate*: proc (event: Event)
-    localStorage*: LocalStorage
+    localStorage*: Storage
+    sessionStorage*: Storage
+    parent*: Window
 
   Frame* = ref FrameObj
   FrameObj {.importc.} = object of WindowObj
@@ -186,10 +200,14 @@ type
     innerText*: cstring
     textContent*: cstring
     style*: Style
+    baseURI*: cstring
+    parentElement*: Element
+    isConnected*: bool
 
   Document* = ref DocumentObj
   DocumentObj {.importc.} = object of NodeObj
     activeElement*: Element
+    documentElement*: Element
     alinkColor*: cstring
     bgColor*: cstring
     body*: Element
@@ -210,9 +228,11 @@ type
     applets*: seq[Element]
     embeds*: seq[EmbedElement]
     links*: seq[LinkElement]
+    fonts*: FontFaceSet
 
   Element* = ref ElementObj
   ElementObj {.importc.} = object of NodeObj
+    className*: cstring
     classList*: ClassList
     checked*: bool
     defaultChecked*: bool
@@ -1189,6 +1209,17 @@ type
     ## see `docs<https://developer.mozilla.org/en-US/docs/Web/API/DragEvent>`_
     dataTransfer*: DataTransfer
 
+  ClipboardEvent* {.importc.} = object of Event
+    ## see `docs<https://developer.mozilla.org/en-US/docs/Web/API/ClipboardEvent>`_
+    clipboardData*: DataTransfer
+
+  StorageEvent* = ref StorageEventObj ## see `docs<https://developer.mozilla.org/en-US/docs/Web/API/StorageEvent>`_
+  StorageEventObj {.importc.} = object of Event
+    key*: cstring
+    newValue*, oldValue*: cstring
+    storageArea*: Storage
+    url*: cstring
+
   TouchList* {.importc.} = ref object of RootObj
     length*: int
 
@@ -1226,10 +1257,19 @@ type
     appCodeName*: cstring
     appName*: cstring
     appVersion*: cstring
+    buildID*: cstring        ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/buildID
     cookieEnabled*: bool
+    deviceMemory*: float     ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/deviceMemory
+    doNotTrack*: cstring     ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/doNotTrack
     language*: cstring
+    languages*: seq[cstring] ## https://developer.mozilla.org/en-US/docs/Web/API/NavigatorLanguage/languages
+    maxTouchPoints*: cint    ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/maxTouchPoints
+    onLine*: bool            ## https://developer.mozilla.org/en-US/docs/Web/API/NavigatorOnLine/onLine
+    oscpu*: cstring          ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/oscpu
     platform*: cstring
     userAgent*: cstring
+    vendor*: cstring         ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vendor
+    webdriver*: bool         ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/webdriver
     mimeTypes*: seq[ref MimeType]
 
   Plugin* {.importc.} = object of RootObj
@@ -1261,12 +1301,26 @@ type
     width*: int
 
   TimeOut* {.importc.} = ref object of RootObj
-  Interval* {.importc.} = object of RootObj
+  Interval* {.importc.} = ref object of RootObj
 
   AddEventListenerOptions* = object
     capture*: bool
     once*: bool
     passive*: bool
+
+  FontFaceSetReady* {.importc.} = ref object
+    ## see: `docs<https://developer.mozilla.org/en-US/docs/Web/API/FontFaceSet/ready>`_
+    then*: proc(cb: proc())
+
+  FontFaceSet* {.importc.} = ref object
+    ## see: `docs<https://developer.mozilla.org/en-US/docs/Web/API/FontFaceSet>`_
+    ready*: FontFaceSetReady
+    onloadingdone*: proc(event: Event)
+
+  ScrollIntoViewOptions* = object
+    behavior*: cstring
+    `block`*: cstring
+    inline*: cstring
 
 since (1, 3):
   type
@@ -1296,6 +1350,26 @@ since (1, 3):
     FileReaderObj {.importc.} = object of EventTargetObj
 
     FileReaderState* = distinct range[0'u16..2'u16]
+    RootNodeOptions* = object of RootObj
+      composed*: bool
+    DocumentOrShadowRoot* {.importc.} = object of RootObj
+      activeElement*: Element
+      # styleSheets*: StyleSheetList
+    ShadowRoot* = ref ShadowRootObj
+    ShadowRootObj {.importc.} = object of DocumentOrShadowRoot
+      delegatesFocus*: bool
+      host*: Element
+      innerHTML*: cstring
+      mode*: cstring # "open" or "closed"
+    ShadowRootInit* = object of RootObj
+      mode*: cstring
+      delegatesFocus*: bool
+
+    HTMLSlotElement* = ref HTMLSlotElementObj
+    HTMLSlotElementObj {.importc.} = object of RootObj
+      name*: cstring
+    SlotOptions* = object of RootObj
+      flatten*: bool
 
   const
     fileReaderEmpty* = 0.FileReaderState
@@ -1309,6 +1383,9 @@ proc `class=`*(n: Node; v: cstring) {.importcpp: "#.className = #", nodecl.}
 
 proc value*(n: Node): cstring {.importcpp: "#.value", nodecl.}
 proc `value=`*(n: Node; v: cstring) {.importcpp: "#.value = #", nodecl.}
+
+proc checked*(n: Node): bool {.importcpp: "#.checked", nodecl.}
+proc `checked=`*(n: Node; v: bool) {.importcpp: "#.checked = #", nodecl.}
 
 proc `disabled=`*(n: Node; v: bool) {.importcpp: "#.disabled = #", nodecl.}
 
@@ -1393,15 +1470,19 @@ else:
   proc getElementById*(id: cstring): Element {.importc: "document.getElementById", nodecl.}
   proc appendChild*(n, child: Node) {.importcpp.}
   proc removeChild*(n, child: Node) {.importcpp.}
+  proc remove*(child: Node) {.importcpp.}
   proc replaceChild*(n, newNode, oldNode: Node) {.importcpp.}
   proc insertBefore*(n, newNode, before: Node) {.importcpp.}
   proc getElementById*(d: Document, id: cstring): Element {.importcpp.}
   proc createElement*(d: Document, identifier: cstring): Element {.importcpp.}
+  proc createElementNS*(d: Document, namespaceURI, qualifiedIdentifier: cstring): Element {.importcpp.}
   proc createTextNode*(d: Document, identifier: cstring): Node {.importcpp.}
   proc createComment*(d: Document, data: cstring): Node {.importcpp.}
 
-proc setTimeout*(action: proc(); ms: int): Timeout {.importc, nodecl.}
-proc clearTimeout*(t: Timeout) {.importc, nodecl.}
+proc setTimeout*(action: proc(); ms: int): TimeOut {.importc, nodecl.}
+proc clearTimeout*(t: TimeOut) {.importc, nodecl.}
+proc setInterval*(action: proc(); ms: int): Interval {.importc, nodecl.}
+proc clearInterval*(i: Interval) {.importc, nodecl.}
 
 {.push importcpp.}
 
@@ -1415,8 +1496,8 @@ proc removeEventListener*(et: EventTarget; ev: cstring; cb: proc(ev: Event))
 proc alert*(w: Window, msg: cstring)
 proc back*(w: Window)
 proc blur*(w: Window)
-proc clearInterval*(w: Window, interval: ref Interval)
-proc clearTimeout*(w: Window, timeout: ref TimeOut)
+proc clearInterval*(w: Window, interval: Interval)
+proc clearTimeout*(w: Window, timeout: TimeOut)
 proc close*(w: Window)
 proc confirm*(w: Window, msg: cstring): bool
 proc disableExternalCapture*(w: Window)
@@ -1425,7 +1506,9 @@ proc find*(w: Window, text: cstring, caseSensitive = false,
            backwards = false)
 proc focus*(w: Window)
 proc forward*(w: Window)
-proc getComputedStyle*(w: Window, e: Node, pe:Node = nil): Style
+proc getComputedStyle*(w: Window, e: Node, pe: Node = nil): Style
+  ## .. warning:: The returned Style may or may not be read-only at run-time in the browser. getComputedStyle is performance costly.
+
 proc handleEvent*(w: Window, e: Event)
 proc home*(w: Window)
 proc moveBy*(w: Window, x, y: int)
@@ -1439,10 +1522,10 @@ proc resizeTo*(w: Window, x, y: int)
 proc routeEvent*(w: Window, event: Event)
 proc scrollBy*(w: Window, x, y: int)
 proc scrollTo*(w: Window, x, y: int)
-proc setInterval*(w: Window, code: cstring, pause: int): ref Interval
-proc setInterval*(w: Window, function: proc (), pause: int): ref Interval
-proc setTimeout*(w: Window, code: cstring, pause: int): ref TimeOut
-proc setTimeout*(w: Window, function: proc (), pause: int): ref Interval
+proc setInterval*(w: Window, code: cstring, pause: int): Interval
+proc setInterval*(w: Window, function: proc (), pause: int): Interval
+proc setTimeout*(w: Window, code: cstring, pause: int): TimeOut
+proc setTimeout*(w: Window, function: proc (), pause: int): Interval
 proc stop*(w: Window)
 proc requestAnimationFrame*(w: Window, function: proc (time: float)): int
 proc cancelAnimationFrame*(w: Window, id: int)
@@ -1454,23 +1537,45 @@ proc deleteData*(n: Node, start, len: int)
 proc focus*(e: Node)
 proc getAttribute*(n: Node, attr: cstring): cstring
 proc getAttributeNode*(n: Node, attr: cstring): Node
-proc hasAttribute*(n: Node; attr: cstring): bool
+proc hasAttribute*(n: Node, attr: cstring): bool
 proc hasChildNodes*(n: Node): bool
+proc normalize*(n: Node)
 proc insertData*(n: Node, position: int, data: cstring)
 proc removeAttribute*(n: Node, attr: cstring)
 proc removeAttributeNode*(n, attr: Node)
 proc replaceData*(n: Node, start, len: int, text: cstring)
 proc scrollIntoView*(n: Node)
+proc scrollIntoView*(n: Node, options: ScrollIntoViewOptions)
 proc setAttribute*(n: Node, name, value: cstring)
 proc setAttributeNode*(n: Node, attr: Node)
 proc querySelector*(n: Node, selectors: cstring): Element
 proc querySelectorAll*(n: Node, selectors: cstring): seq[Element]
+proc compareDocumentPosition*(n: Node, otherNode:Node): int
+proc lookupPrefix*(n: Node): cstring
+proc lookupNamespaceURI*(n: Node): cstring
+proc isDefaultNamespace*(n: Node): bool
+proc contains*(n: Node): bool
+proc isEqualNode*(n: Node): bool
+proc isSameNode*(n: Node): bool
+
+since (1, 3):
+  proc getRootNode*(n: Node,options: RootNodeOptions): Node
+
+  # DocumentOrShadowRoot
+  proc getSelection*(n: DocumentOrShadowRoot): Selection
+  proc elementFromPoint*(n: DocumentOrShadowRoot; x, y: float): Element
+
+  # shadow dom
+  proc attachShadow*(n: Element): ShadowRoot
+  proc assignedNodes*(n: HTMLSlotElement; options: SlotOptions): seq[Node]
+  proc assignedElements*(n: HTMLSlotElement; options: SlotOptions): seq[Element]
 
 # Document "methods"
 proc createAttribute*(d: Document, identifier: cstring): Node
 proc getElementsByName*(d: Document, name: cstring): seq[Element]
 proc getElementsByTagName*(d: Document, name: cstring): seq[Element]
 proc getElementsByClassName*(d: Document, name: cstring): seq[Element]
+proc insertNode*(range: Range, node: Node)
 proc getSelection*(d: Document): Selection
 proc handleEvent*(d: Document, event: Event)
 proc open*(d: Document)
@@ -1511,6 +1616,12 @@ proc pushState*[T](h: History, stateObject: T, title, url: cstring)
 
 # Navigator "methods"
 proc javaEnabled*(h: Navigator): bool
+since (1, 3):
+  proc canShare*(self: Navigator; data: cstring): bool           ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/canShare
+  proc sendBeacon*(self: Navigator; url, data: cstring): bool    ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/sendBeacon
+  proc vibrate*(self: Navigator; pattern: cint): bool            ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate
+  proc vibrate*(self: Navigator; pattern: openArray[cint]): bool ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate
+  proc registerProtocolHandler*(self: Navigator; scheme, url, title: cstring) ## https://developer.mozilla.org/en-US/docs/Web/API/Navigator/registerProtocolHandler
 
 # ClassList "methods"
 proc add*(c: ClassList, class: cstring)
@@ -1562,15 +1673,17 @@ proc now*(p: Performance): float
 
 # Selection "methods"
 proc removeAllRanges*(s: Selection)
+proc deleteFromDocument*(s: Selection)
+proc getRangeAt*(s: Selection, index: int): Range
 converter toString*(s: Selection): cstring
 proc `$`*(s: Selection): string = $(s.toString())
 
-# LocalStorage "methods"
-proc getItem*(ls: LocalStorage, key: cstring): cstring
-proc setItem*(ls: LocalStorage, key, value: cstring)
-proc hasItem*(ls: LocalStorage, key: cstring): bool
-proc clear*(ls: LocalStorage)
-proc removeItem*(ls: LocalStorage, key: cstring)
+# Storage "methods"
+proc getItem*(s: Storage, key: cstring): cstring
+proc setItem*(s: Storage, key, value: cstring)
+proc hasItem*(s: Storage, key: cstring): bool
+proc clear*(s: Storage)
+proc removeItem*(s: Storage, key: cstring)
 
 {.pop.}
 
@@ -1594,6 +1707,7 @@ proc decodeURIComponent*(uri: cstring): cstring {.importc, nodecl.}
 proc encodeURIComponent*(uri: cstring): cstring {.importc, nodecl.}
 proc isFinite*(x: BiggestFloat): bool {.importc, nodecl.}
 proc isNaN*(x: BiggestFloat): bool {.importc, nodecl.}
+  ## see also `math.isNaN`.
 
 proc newEvent*(name: cstring): Event {.importcpp: "new Event(@)", constructor.}
 
@@ -1629,9 +1743,9 @@ proc offsetTop*(e: Node): int {.importcpp: "#.offsetTop", nodecl.}
 proc offsetLeft*(e: Node): int {.importcpp: "#.offsetLeft", nodecl.}
 
 since (1, 3):
-  func newDomParser*(): DOMParser {.importcpp: "new DOMParser()".}
+  func newDomParser*(): DomParser {.importcpp: "new DOMParser()".}
     ## DOM Parser constructor.
-  func parseFromString*(this: DOMParser; str: cstring; mimeType: cstring): Document {.importcpp.}
+  func parseFromString*(this: DomParser; str: cstring; mimeType: cstring): Document {.importcpp.}
     ## Parse from string to `Document`.
 
   proc newDomException*(): DomException {.importcpp: "new DomException()", constructor.}
@@ -1643,7 +1757,7 @@ since (1, 3):
 
   proc newFileReader*(): FileReader {.importcpp: "new FileReader()", constructor.}
     ## File Reader constructor
-  proc error*(f: FileReader): DOMException {.importcpp: "#.error", nodecl.}
+  proc error*(f: FileReader): DomException {.importcpp: "#.error", nodecl.}
     ## https://developer.mozilla.org/en-US/docs/Web/API/FileReader/error
   proc readyState*(f: FileReader): FileReaderState {.importcpp: "#.readyState", nodecl.}
     ## https://developer.mozilla.org/en-US/docs/Web/API/FileReader/readyState
@@ -1655,5 +1769,8 @@ since (1, 3):
     ## https://developer.mozilla.org/en-US/docs/Web/API/FileReader/readAsBinaryString
   proc readAsDataURL*(f: FileReader, b: Blob) {.importcpp: "#.readAsDataURL(#)".}
     ## https://developer.mozilla.org/en-US/docs/Web/API/FileReader/readAsDataURL
-  proc readAsText*(f: FileReader, b: Blob, encoding = cstring"UTF-8") {.importcpp: "#.readAsText(#, #)".}
+  proc readAsText*(f: FileReader, b: Blob|File, encoding = cstring"UTF-8") {.importcpp: "#.readAsText(#, #)".}
     ## https://developer.mozilla.org/en-US/docs/Web/API/FileReader/readAsText
+
+since (1, 5):
+  proc elementsFromPoint*(n: DocumentOrShadowRoot; x, y: float): seq[Element] {.importcpp.}

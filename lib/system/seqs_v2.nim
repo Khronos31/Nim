@@ -22,7 +22,8 @@ type
     cap: int
     data: UncheckedArray[T]
 
-  NimSeqV2*[T] = object
+  NimSeqV2*[T] = object # \
+    # if you change this implementation, also change seqs_v2_reimpl.nim!
     len: int
     p: ptr NimSeqPayload[T]
 
@@ -34,18 +35,21 @@ proc newSeqPayload(cap, elemSize, elemAlign: int): pointer {.compilerRtl, raises
   # we have to use type erasure here as Nim does not support generic
   # compilerProcs. Oh well, this will all be inlined anyway.
   if cap > 0:
-    var p = cast[ptr NimSeqPayloadBase](allocShared0(align(sizeof(NimSeqPayloadBase), elemAlign) + cap * elemSize))
+    var p = cast[ptr NimSeqPayloadBase](alignedAlloc0(align(sizeof(NimSeqPayloadBase), elemAlign) + cap * elemSize, elemAlign))
     p.cap = cap
     result = p
   else:
     result = nil
 
-proc prepareSeqAdd(len: int; p: pointer; addlen, elemSize, elemAlign: int): pointer {.
-    noSideEffect, raises: [].} =
-  {.noSideEffect.}:
-    template `+!`(p: pointer, s: int): pointer =
-      cast[pointer](cast[int](p) +% s)
+template `+!`(p: pointer, s: int): pointer =
+  cast[pointer](cast[int](p) +% s)
 
+template `-!`(p: pointer, s: int): pointer =
+  cast[pointer](cast[int](p) -% s)
+
+proc prepareSeqAdd(len: int; p: pointer; addlen, elemSize, elemAlign: int): pointer {.
+    noSideEffect, raises: [], compilerRtl.} =
+  {.noSideEffect.}:
     let headerSize = align(sizeof(NimSeqPayloadBase), elemAlign)
     if addlen <= 0:
       result = p
@@ -58,31 +62,31 @@ proc prepareSeqAdd(len: int; p: pointer; addlen, elemSize, elemAlign: int): poin
       let oldCap = p.cap and not strlitFlag
       let newCap = max(resize(oldCap), len+addlen)
       if (p.cap and strlitFlag) == strlitFlag:
-        var q = cast[ptr NimSeqPayloadBase](allocShared0(headerSize + elemSize * newCap))
+        var q = cast[ptr NimSeqPayloadBase](alignedAlloc0(headerSize + elemSize * newCap, elemAlign))
         copyMem(q +! headerSize, p +! headerSize, len * elemSize)
         q.cap = newCap
         result = q
       else:
         let oldSize = headerSize + elemSize * oldCap
         let newSize = headerSize + elemSize * newCap
-        var q = cast[ptr NimSeqPayloadBase](reallocShared0(p, oldSize, newSize))
+        var q = cast[ptr NimSeqPayloadBase](alignedRealloc0(p, oldSize, newSize, elemAlign))
         q.cap = newCap
         result = q
 
-proc shrink*[T](x: var seq[T]; newLen: Natural) =
+proc shrink*[T](x: var seq[T]; newLen: Natural) {.tags: [], raises: [].} =
   when nimvm:
     setLen(x, newLen)
   else:
-    mixin `=destroy`
     #sysAssert newLen <= x.len, "invalid newLen parameter for 'shrink'"
     when not supportsCopyMem(T):
       for i in countdown(x.len - 1, newLen):
-        `=destroy`(x[i])
+        reset x[i]
     # XXX This is wrong for const seqs that were moved into 'x'!
     cast[ptr NimSeqV2[T]](addr x).len = newLen
 
 proc grow*[T](x: var seq[T]; newLen: Natural; value: T) =
   let oldLen = x.len
+  #sysAssert newLen >= x.len, "invalid newLen parameter for 'grow'"
   if newLen <= oldLen: return
   var xu = cast[ptr NimSeqV2[T]](addr x)
   if xu.p == nil or xu.p.cap < newLen:
@@ -120,3 +124,7 @@ proc setLen[T](s: var seq[T], newlen: Natural) =
       if xu.p == nil or xu.p.cap < newlen:
         xu.p = cast[typeof(xu.p)](prepareSeqAdd(oldLen, xu.p, newlen - oldLen, sizeof(T), alignof(T)))
       xu.len = newlen
+
+proc newSeq[T](s: var seq[T], len: Natural) =
+  shrink(s, 0)
+  setLen(s, len)

@@ -20,12 +20,6 @@ Hi Andreas! How do you feel, Rumpf?
 @[0, 2, 1]
 @[0, 1, 2]
 055this should be the casehugh@["(", "+", " 1", " 2", ")"]
-caught a crash!
-caught a crash!
-caught a crash!
-caught a crash!
-caught a crash!
-caught a crash!
 [5]
 [4, 5]
 [3, 4, 5]
@@ -38,7 +32,7 @@ true
 """
 
 import
-  critbits, cstrutils, sets, strutils, tables, random, algorithm, re, ropes,
+  critbits, sets, strutils, tables, random, algorithm, re, ropes,
   segfaults, lists, parsesql, streams, os, htmlgen, xmltree, strtabs
 
 
@@ -161,18 +155,21 @@ block tropes:
 
 
 block tsegfaults:
-  proc main =
-    try:
-      var x: ptr int
-      echo x[]
+  when not defined(arm64):
+    var crashes = 0
+    proc main =
       try:
-        raise newException(ValueError, "not a crash")
-      except ValueError:
-        discard
-    except NilAccessDefect:
-      echo "caught a crash!"
-  for i in 0..5:
-    main()
+        var x: ptr int
+        echo x[]
+        try:
+          raise newException(ValueError, "not a crash")
+        except ValueError:
+          discard
+      except NilAccessDefect:
+        inc crashes
+    for i in 0..5:
+      main()
+    assert crashes == 6
 
 
 
@@ -245,24 +242,3 @@ block txmltree:
     ])
   ])
   doAssert(y.innerText == "foobar")
-
-
-block tcstrutils:
-  let s = cstring "abcdef"
-  doAssert s.startsWith("a")
-  doAssert not s.startsWith("b")
-  doAssert s.endsWith("f")
-  doAssert not s.endsWith("a")
-
-  let a = cstring "abracadabra"
-  doAssert a.startsWith("abra")
-  doAssert not a.startsWith("bra")
-  doAssert a.endsWith("abra")
-  doAssert not a.endsWith("dab")
-
-  doAssert cmpIgnoreCase(cstring "FooBar", "foobar") == 0
-  doAssert cmpIgnoreCase(cstring "bar", "Foo") < 0
-  doAssert cmpIgnoreCase(cstring "Foo5", "foo4") > 0
-
-  doAssert cmpIgnoreStyle(cstring "foo_bar", "FooBar") == 0
-  doAssert cmpIgnoreStyle(cstring "foo_bar_5", "FooBar4") > 0

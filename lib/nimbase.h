@@ -75,7 +75,8 @@ __AVR__
 #endif
 /* ------------------------------------------------------------------------- */
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(__ZEPHYR__)
+/* Zephyr does some magic in it's headers that override the GCC stdlib. This breaks that. */
 #  define _GNU_SOURCE 1
 #endif
 
@@ -141,6 +142,10 @@ __AVR__
 #  define NIM_THREADVAR __thread
 #else
 #  error "Cannot define NIM_THREADVAR"
+#endif
+
+#if defined(__cplusplus)
+  #define NIM_THREAD_LOCAL thread_local
 #endif
 
 /* --------------- how int64 constants should be declared: ----------- */
@@ -321,6 +326,9 @@ typedef unsigned char NIM_BOOL; // best effort
 #endif
 
 NIM_STATIC_ASSERT(sizeof(NIM_BOOL) == 1, ""); // check whether really needed
+NIM_STATIC_ASSERT(CHAR_BIT == 8, "");
+  // fail fast for (rare) environments where this doesn't hold, as some implicit
+  // assumptions would need revisiting (e.g. `uint8` or https://github.com/nim-lang/Nim/pull/18505)
 
 #define NIM_TRUE true
 #define NIM_FALSE false
@@ -587,5 +595,8 @@ NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, ""
     #define nimMulInt(a, b, res) __builtin_smulll_overflow(a, b, (long long int*)res)
   #endif
 #endif
+
+#define NIM_NOALIAS __restrict
+/* __restrict is said to work for all the C(++) compilers out there that we support */
 
 #endif /* NIMBASE_H */

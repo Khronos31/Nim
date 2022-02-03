@@ -1,6 +1,6 @@
 
 import
-  intsets, ast, idents, algorithm, renderer, os, strutils,
+  intsets, ast, idents, algorithm, renderer, strutils,
   msgs, modulegraphs, syntaxes, options, modulepaths,
   lineinfos
 
@@ -36,11 +36,8 @@ proc newDepN(id: int, pnode: PNode): DepN =
 proc accQuoted(cache: IdentCache; n: PNode): PIdent =
   var id = ""
   for i in 0..<n.len:
-    let x = n[i]
-    case x.kind
-    of nkIdent: id.add(x.ident.s)
-    of nkSym: id.add(x.sym.name.s)
-    else: discard
+    let ident = n[i].getPIdent
+    if ident != nil: id.add(ident.s)
   result = getIdent(cache, id)
 
 proc addDecl(cache: IdentCache; n: PNode; declares: var IntSet) =
@@ -105,30 +102,10 @@ proc computeDeps(cache: IdentCache; n: PNode, declares, uses: var IntSet; topLev
       decl(a[1])
     else:
       for i in 0..<n.safeLen: deps(n[i])
+  of nkMixinStmt, nkBindStmt: discard
   else:
+    # XXX: for callables, this technically adds the return type dep before args
     for i in 0..<n.safeLen: deps(n[i])
-
-proc cleanPath(s: string): string =
-  # Here paths may have the form A / B or "A/B"
-  result = ""
-  for c in s:
-    if c != ' ' and c != '\"':
-      result.add c
-
-proc joinPath(parts: seq[string]): string =
-  let nb = parts.len
-  assert nb > 0
-  if nb == 1:
-    return parts[0]
-  result = parts[0] / parts[1]
-  for i in 2..<parts.len:
-    result = result / parts[i]
-
-proc getIncludePath(n: PNode, modulePath: string): string =
-  let istr = n.renderTree.cleanPath
-  let (pdir, _) = modulePath.splitPath
-  let p = istr.split('/').joinPath.addFileExt("nim")
-  result = pdir / p
 
 proc hasIncludes(n:PNode): bool =
   for a in n:
@@ -212,7 +189,7 @@ proc mergeSections(conf: ConfigRef; comps: seq[seq[DepN]], res: PNode) =
         # their original relative order and make sure to re-merge
         # consecutive type and const sections
         var wmsg = "Circular dependency detected. `codeReordering` pragma may not be able to" &
-          " reorder some nodes properely"
+          " reorder some nodes properly"
         when defined(debugReorder):
           wmsg &= ":\n"
           for i in 0..<cs.len-1:
@@ -409,8 +386,7 @@ proc strongConnect(v: var DepN, idx: var int, s: var seq[DepN],
 proc getStrongComponents(g: var DepG): seq[seq[DepN]] =
   ## Tarjan's algorithm. Performs a topological sort
   ## and detects strongly connected components.
-  result = newSeq[seq[DepN]]()
-  var s = newSeq[DepN]()
+  var s: seq[DepN]
   var idx = 0
   for v in g.mitems:
     if v.idx < 0:

@@ -53,7 +53,7 @@ import std/private/since
 import
   hashes, strutils
 
-when defined(js) or defined(nimscript):
+when defined(js) or defined(nimscript) or defined(Standalone):
   {.pragma: rtlFunc.}
 else:
   {.pragma: rtlFunc, rtl.}
@@ -89,6 +89,7 @@ const
   growthFactor = 2
   startSize = 64
 
+proc mode*(t: StringTableRef): StringTableMode {.inline.} = t.mode
 
 iterator pairs*(t: StringTableRef): tuple[key, value: string] =
   ## Iterates over every `(key, value)` pair in the table `t`.
@@ -140,10 +141,8 @@ template get(t: StringTableRef, key: string) =
   var index = rawGet(t, key)
   if index >= 0: result = t.data[index].val
   else:
-    when compiles($key):
-      raise newException(KeyError, "key not found: " & $key)
-    else:
-      raise newException(KeyError, "key not found")
+    raise newException(KeyError, "key not found: " & key)
+
 
 proc len*(t: StringTableRef): int {.rtlFunc, extern: "nst$1".} =
   ## Returns the number of keys in `t`.
@@ -232,7 +231,7 @@ proc enlarge(t: StringTableRef) =
   swap(t.data, n)
 
 proc `[]=`*(t: StringTableRef, key, val: string) {.
-  rtlFunc, extern: "nstPut", noSideEffect.} =
+  rtlFunc, extern: "nstPut".} =
   ## Inserts a `(key, value)` pair into `t`.
   ##
   ## See also:
@@ -252,7 +251,7 @@ proc `[]=`*(t: StringTableRef, key, val: string) {.
     inc(t.counter)
 
 proc newStringTable*(mode: StringTableMode): owned(StringTableRef) {.
-  rtlFunc, extern: "nst$1".} =
+  rtlFunc, extern: "nst$1", noSideEffect.} =
   ## Creates a new empty string table.
   ##
   ## See also:
@@ -265,7 +264,7 @@ proc newStringTable*(mode: StringTableMode): owned(StringTableRef) {.
 
 proc newStringTable*(keyValuePairs: varargs[string],
                      mode: StringTableMode): owned(StringTableRef) {.
-  rtlFunc, extern: "nst$1WithPairs".} =
+  rtlFunc, extern: "nst$1WithPairs", noSideEffect.} =
   ## Creates a new string table with given `key, value` string pairs.
   ##
   ## `StringTableMode` must be specified.
@@ -276,12 +275,13 @@ proc newStringTable*(keyValuePairs: varargs[string],
   result = newStringTable(mode)
   var i = 0
   while i < high(keyValuePairs):
-    result[keyValuePairs[i]] = keyValuePairs[i + 1]
+    {.noSideEffect.}:
+      result[keyValuePairs[i]] = keyValuePairs[i + 1]
     inc(i, 2)
 
 proc newStringTable*(keyValuePairs: varargs[tuple[key, val: string]],
     mode: StringTableMode = modeCaseSensitive): owned(StringTableRef) {.
-    rtlFunc, extern: "nst$1WithTableConstr".} =
+    rtlFunc, extern: "nst$1WithTableConstr", noSideEffect.} =
   ## Creates a new string table with given `(key, value)` tuple pairs.
   ##
   ## The default mode is case sensitive.
@@ -291,18 +291,19 @@ proc newStringTable*(keyValuePairs: varargs[tuple[key, val: string]],
       mytab2 = newStringTable([("key3", "val3"), ("key4", "val4")])
 
   result = newStringTable(mode)
-  for key, val in items(keyValuePairs): result[key] = val
+  for key, val in items(keyValuePairs):
+    {.noSideEffect.}:
+      result[key] = val
 
 proc raiseFormatException(s: string) =
   raise newException(ValueError, "format string: key not found: " & s)
 
 proc getValue(t: StringTableRef, flags: set[FormatFlag], key: string): string =
   if hasKey(t, key): return t.getOrDefault(key)
-  # hm difficult: assume safety in taint mode here. XXX This is dangerous!
-  when defined(js) or defined(nimscript):
+  when defined(js) or defined(nimscript) or defined(Standalone):
     result = ""
   else:
-    if useEnvironment in flags: result = os.getEnv(key).string
+    if useEnvironment in flags: result = getEnv(key)
     else: result = ""
   if result.len == 0:
     if useKey in flags: result = '$' & key
@@ -418,34 +419,3 @@ proc `%`*(f: string, t: StringTableRef, flags: set[FormatFlag] = {}): string {.
     else:
       add(result, f[i])
       inc(i)
-
-since (1,3,5):
-  proc fromJsonHook*[T](a: var StringTableRef, b: T) =
-    ## for json.fromJson
-    mixin jsonTo
-    var mode = jsonTo(b["mode"], StringTableMode)
-    a = newStringTable(mode)
-    let b2 = b["table"]
-    for k,v in b2: a[k] = jsonTo(v, string)
-
-  proc toJsonHook*[](a: StringTableRef): auto =
-    ## for json.toJson
-    mixin newJObject
-    mixin toJson
-    result = newJObject()
-    result["mode"] = toJson($a.mode)
-    let t = newJObject()
-    for k,v in a: t[k] = toJson(v)
-    result["table"] = t
-
-when isMainModule:
-  var x = {"k": "v", "11": "22", "565": "67"}.newStringTable
-  assert x["k"] == "v"
-  assert x["11"] == "22"
-  assert x["565"] == "67"
-  x["11"] = "23"
-  assert x["11"] == "23"
-
-  x.clear(modeCaseInsensitive)
-  x["11"] = "22"
-  assert x["11"] == "22"

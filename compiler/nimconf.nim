@@ -10,8 +10,13 @@
 # This module handles the reading of the config file.
 
 import
-  llstream, commands, os, strutils, msgs, lexer, ast,
-  options, idents, wordrecg, strtabs, lineinfos, pathutils, scriptconfig
+  llstream, commands, msgs, lexer, ast,
+  options, idents, wordrecg, lineinfos, pathutils, scriptconfig, icconfig
+
+import std/[os, strutils, strtabs]
+
+when defined(nimPreviewSlimSystem):
+  import std/syncio
 
 # ---------------- configuration file parser -----------------------------
 # we use Nim's lexer here to save space and work
@@ -159,7 +164,7 @@ proc checkSymbol(L: Lexer, tok: Token) =
     lexMessage(L, errGenerated, "expected identifier, but got: " & $tok)
 
 proc parseAssignment(L: var Lexer, tok: var Token;
-                     config: ConfigRef; condStack: var seq[bool]) =
+                     config: ConfigRef; filename: AbsoluteFile; condStack: var seq[bool]) =
   if tok.ident != nil:
     if tok.ident.s == "-" or tok.ident.s == "--":
       confTok(L, tok, config, condStack)           # skip unnecessary prefix
@@ -211,20 +216,21 @@ proc parseAssignment(L: var Lexer, tok: var Token;
 proc readConfigFile*(filename: AbsoluteFile; cache: IdentCache;
                     config: ConfigRef): bool =
   var
-    L: Lexer
+    L: Lexer = default(Lexer)
     tok: Token
     stream: PLLStream
   stream = llStreamOpen(filename, fmRead)
   if stream != nil:
-    initToken(tok)
     openLexer(L, filename, stream, cache, config)
-    tok.tokType = tkEof       # to avoid a pointless warning
+    tok = Token(tokType: tkEof)       # to avoid a pointless warning
     var condStack: seq[bool] = @[]
     confTok(L, tok, config, condStack)           # read in the first token
-    while tok.tokType != tkEof: parseAssignment(L, tok, config, condStack)
+    while tok.tokType != tkEof: parseAssignment(L, tok, config, filename, condStack)
     if condStack.len > 0: lexMessage(L, errGenerated, "expected @end")
     closeLexer(L)
     return true
+  else:
+    result = false
 
 proc getUserConfigPath*(filename: RelativeFile): AbsoluteFile =
   result = getConfigDir().AbsoluteDir / RelativeDir"nim" / filename
@@ -240,14 +246,26 @@ proc getSystemConfigPath*(conf: ConfigRef; filename: RelativeFile): AbsoluteFile
 
 proc loadConfigs*(cfg: RelativeFile; cache: IdentCache; conf: ConfigRef; idgen: IdGenerator) =
   setDefaultLibpath(conf)
+  # The `nim ic` driver and its `nim m`/`nim nifc` children replay the precompiled
+  # config (produced once by a separate `nim icconfig` process — see
+  # `icconfig.ensureIcConfig`, which sets `icPreparsedConfig` for the driver
+  # before this runs; the children get it as a forwarded `--icPreparsedConfig`
+  # argument) instead of re-reading the `nim.cfg` chain and re-running
+  # `config.nims` in the VM. A missing/format-incompatible artifact returns false:
+  # fall through to a normal parse (this is also the path the `nim icconfig`
+  # producer itself takes, since it runs with no `icPreparsedConfig`).
+  if conf.icPreparsedConfig.len > 0 and applyIcConfig(conf, conf.icPreparsedConfig):
+    return
   template readConfigFile(path) =
     let configPath = path
+    conf.currentConfigDir = configPath.splitFile.dir.string
+    setConfigVar(conf, "selfDir", conf.currentConfigDir)
     if readConfigFile(configPath, cache, conf):
       conf.configFiles.add(configPath)
 
   template runNimScriptIfExists(path: AbsoluteFile, isMain = false) =
     let p = path # eval once
-    var s: PLLStream
+    var s: PLLStream = nil
     if isMain and optWasNimscript in conf.globalOptions:
       if conf.projectIsStdin: s = stdin.llStreamOpen
       elif conf.projectIsCmd: s = llStreamOpen(conf.cmdInput)
@@ -298,7 +316,7 @@ proc loadConfigs*(cfg: RelativeFile; cache: IdentCache; conf: ConfigRef; idgen: 
   if conf.cmd == cmdNimscript:
     showHintConf()
     conf.configFiles.setLen 0
-  if conf.cmd != cmdIdeTools:
+  if not conf.ideActive and conf.cmd notin {cmdCheck, cmdDump}:
     if conf.cmd == cmdNimscript:
       runNimScriptIfExists(conf.projectFull, isMain = true)
     else:
@@ -308,5 +326,6 @@ proc loadConfigs*(cfg: RelativeFile; cache: IdentCache; conf: ConfigRef; idgen: 
       runNimScriptIfExists(scriptFile, isMain = true)
     else:
       # 'nimsuggest foo.nims' means to just auto-complete the NimScript file
+      # `nim check foo.nims' means to check the syntax of the NimScript file
       discard
   showHintConf()

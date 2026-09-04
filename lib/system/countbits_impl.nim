@@ -9,8 +9,7 @@
 
 ## Contains the used algorithms for counting bits.
 
-from std/private/bitops_utils import forwardImpl, toUnsigned
-
+from std/private/bitops_utils import forwardImpl, castToUnsigned
 
 const useBuiltins* = not defined(noIntrinsicsBitOpts)
 const noUndefined* = defined(noUndefinedBitOpts)
@@ -65,8 +64,7 @@ func countSetBitsImpl*(x: SomeInteger): int {.inline.} =
   ## Counts the set bits in an integer (also called `Hamming weight`:idx:).
   # TODO: figure out if ICC support _popcnt32/_popcnt64 on platform without POPCNT.
   # like GCC and MSVC
-  when x is SomeSignedInt:
-    let x = x.toUnsigned
+  let x = x.castToUnsigned
   when nimvm:
     result = forwardImpl(countBitsImpl, x)
   else:
@@ -87,9 +85,3 @@ func countSetBitsImpl*(x: SomeInteger): int {.inline.} =
     else:
       when sizeof(x) <= 4: result = countBitsImpl(x.uint32)
       else: result = countBitsImpl(x.uint64)
-
-proc countBits32*(n: uint32): int {.compilerproc, inline.} =
-  result = countSetBitsImpl(n)
-
-proc countBits64*(n: uint64): int {.compilerproc, inline.} =
-  result = countSetBitsImpl(n)

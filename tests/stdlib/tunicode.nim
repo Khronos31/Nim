@@ -1,5 +1,9 @@
-import std/unicode
+discard """
+  matrix: "--mm:refc; --mm:orc"
+"""
 
+import std/unicode
+import std/assertions
 
 proc asRune(s: static[string]): Rune =
   ## Compile-time conversion proc for converting string literals to a Rune
@@ -53,6 +57,7 @@ doAssert isAlpha("r")
 doAssert isAlpha("α")
 doAssert isAlpha("ϙ")
 doAssert isAlpha("ஶ")
+doAssert isAlpha("网")
 doAssert(not isAlpha("$"))
 doAssert(not isAlpha(""))
 
@@ -62,6 +67,7 @@ doAssert isAlpha("𐌼𐌰𐌲𐌲𐌻𐌴𐍃𐍄𐌰𐌽")
 doAssert isAlpha("ὕαλονϕαγεῖνδύναμαιτοῦτοοὔμεβλάπτει")
 doAssert isAlpha("Јамогујестистаклоитоминештети")
 doAssert isAlpha("Կրնամապակիուտեևինծիանհանգիստչըներ")
+doAssert isAlpha("编程语言")
 doAssert(not isAlpha("$Foo✓"))
 doAssert(not isAlpha("⠙⠕⠑⠎⠝⠞"))
 
@@ -188,6 +194,23 @@ block stripTests:
   doAssert(strip("×text×", leading = false, runes = ["×".asRune]) == "×text")
   doAssert(strip("×text×", trailing = false, runes = ["×".asRune]) == "text×")
 
+  doAssert(strip("\u2000") == "")
+  doAssert(strip("a\u2000") == "a")
+
+  # bug #19846
+  block:
+    # check against unicode whose utf8 byteLen > 2
+    doAssert(strip("‟„”“‛‚’‘‗•STR•‗‘’‚‛“”„‟", runes = "•‗‘’‚‛“”„‟".toRunes) == "STR")
+    let chi = "abc\u8377\u9020"
+    doAssert(strip(chi, leading = false, runes = ["\u9020".asRune]) == "abc\u8377")
+    doAssert(strip(chi) == chi)  # the last byte of s is \x0a, which is in unicodeSpace
+
+    let
+      grinning_face = "\u{1f600}"
+      thinking_face = "\u{1f914}"
+    doAssert(strip(grinning_face & thinking_face & thinking_face,
+                   runes = thinking_face.toRunes) == grinning_face)
+
 block repeatTests:
   doAssert repeat('c'.Rune, 5) == "ccccc"
   doAssert repeat("×".asRune, 5) == "×××××"
@@ -218,5 +241,5 @@ block: # bug #17768
   let s1 = "abcdef"
   let s2 = "abcdéf"
 
-  doAssert s1.runeSubstr(0, -1) == "abcde"
-  doAssert s2.runeSubstr(0, -1) == "abcdé"
+  doAssert s1.runeSubStr(0, -1) == "abcde"
+  doAssert s2.runeSubStr(0, -1) == "abcdé"

@@ -1,4 +1,9 @@
+discard """
+  matrix: "--mm:refc; --mm:orc"
+"""
+
 import tables, hashes
+import std/assertions
 
 type
   Person = object
@@ -27,6 +32,22 @@ s2[p1] = 30_000
 s2[p2] = 45_000
 s3[p1] = 30_000
 s3[p2] = 45_000
+
+block: # two-argument form of withValue forms expression
+  block: # Present
+    let sal = salaries.withValue(p1, sal):
+      sal[]
+    do:
+      0
+    doAssert sal == 30_000
+  block: # Missing
+    let sal = salaries.withValue(Person(), sal):
+      sal[]
+    do:
+      0
+    doAssert sal == 0
+  block: # Short form
+    doAssert salaries.withValue(p1, sal, sal[], 0) == 30_000
 
 block: # Ordered table should preserve order after deletion
   var
@@ -309,3 +330,18 @@ block countTableWithoutInit:
   d.inc("f")
   merge(d, e)
   doAssert d["f"] == 7
+
+block: # issue #23587
+  type
+    A = proc ()
+
+  proc main =
+    let repo = initTable[uint32, A]()
+
+    let c1 = repo.getOrDefault(uint32(1), nil)
+    doAssert c1.isNil
+
+    let c2 = repo.getOrDefault(uint32(1), A(nil))
+    doAssert c2.isNil
+
+  main()

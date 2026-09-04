@@ -1,7 +1,7 @@
 #
 #
 #            Nim's Runtime Library
-#        (c) Copyright 2011 Alexander Mitchell-Robinson
+#        (c) Copyright 2024 Nim Contributors
 #
 #    See the file "copying.txt", included in this
 #    distribution, for details about the copyright.
@@ -82,7 +82,12 @@ runnableExamples:
 
 import std/private/since
 
-import macros
+import std/macros
+from std/typetraits import supportsCopyMem
+
+when defined(nimPreviewSlimSystem):
+  import std/assertions
+
 
 when defined(nimHasEffectsOf):
   {.experimental: "strictEffects".}
@@ -111,6 +116,18 @@ macro evalOnceAs(expAlias, exp: untyped,
     newProc(name = genSym(nskTemplate, $expAlias), params = [getType(untyped)],
       body = val, procType = nnkTemplateDef))
 
+template unCheckedInc(x) =
+  {.push overflowChecks: off.}
+  inc(x)
+  {.pop.}
+
+template newSeqForOverwrite(T: typedesc; len: int): untyped =
+  ## Allocates a fixed-length seq whose elements will be assigned by index.
+  when supportsCopyMem(T) and declared(newSeqUninit):
+    newSeqUninit[T](len)
+  else: # TODO: use `newSeqUnsafe` when that's available
+    newSeq[T](len)
+
 func concat*[T](seqs: varargs[seq[T]]): seq[T] =
   ## Takes several sequences' items and returns them inside a new sequence.
   ## All sequences must be of the same type.
@@ -134,7 +151,23 @@ func concat*[T](seqs: varargs[seq[T]]): seq[T] =
   for s in items(seqs):
     for itm in items(s):
       result[i] = itm
-      inc(i)
+      unCheckedInc(i)
+
+func addUnique*[T](s: var seq[T], x: sink T) =
+  ## Adds `x` to the container `s` if it is not already present. 
+  ## Uses `==` to check if the item is already present.
+  runnableExamples:
+    var a = @[1, 2, 3]
+    a.addUnique(4)
+    a.addUnique(4)
+    assert a == @[1, 2, 3, 4]
+
+  for i in 0..high(s):
+    if s[i] == x: return
+  when declared(ensureMove):
+    s.add ensureMove(x)
+  else:
+    s.add x
 
 func count*[T](s: openArray[T], x: T): int =
   ## Returns the number of occurrences of the item `x` in the container `s`.
@@ -146,10 +179,10 @@ func count*[T](s: openArray[T], x: T): int =
     assert count(a, 2) == 4
     assert count(a, 99) == 0
     assert count(b, 'r') == 2
-
+  result = 0
   for itm in items(s):
     if itm == x:
-      inc result
+      unCheckedInc result
 
 func cycle*[T](s: openArray[T], n: Natural): seq[T] =
   ## Returns a new sequence with the items of the container `s` repeated
@@ -167,7 +200,7 @@ func cycle*[T](s: openArray[T], n: Natural): seq[T] =
   for x in 0 ..< n:
     for e in s:
       result[o] = e
-      inc o
+      unCheckedInc o
 
 proc repeat*[T](x: T, n: Natural): seq[T] =
   ## Returns a new sequence with the item `x` repeated `n` times.
@@ -210,6 +243,18 @@ func deduplicate*[T](s: openArray[T], isSorted: bool = false): seq[T] =
       for itm in items(s):
         if not result.contains(itm): result.add(itm)
 
+proc min*[T](x: openArray[T], cmp: proc(a, b: T): int): T {.effectsOf: cmp.} =
+  ## The minimum value of `x`.
+  result = x[0]
+  for i in 1..high(x):
+    if cmp(x[i], result) < 0: result = x[i]
+
+proc max*[T](x: openArray[T], cmp: proc(a, b: T): int): T {.effectsOf: cmp.} =
+  ## The maximum value of `x`.
+  result = x[0]
+  for i in 1..high(x):
+    if cmp(result, x[i]) < 0: result = x[i]
+
 func minIndex*[T](s: openArray[T]): int {.since: (1, 1).} =
   ## Returns the index of the minimum value of `s`.
   ## `T` needs to have a `<` operator.
@@ -223,9 +268,23 @@ func minIndex*[T](s: openArray[T]): int {.since: (1, 1).} =
     assert minIndex(b) == 3
     assert minIndex(c) == 1
     assert minIndex(d) == 2
-
+  result = 0
   for i in 1..high(s):
     if s[i] < s[result]: result = i
+
+func minIndex*[T](s: openArray[T], cmp: proc(a, b: T): int): int {.effectsOf: cmp.} =
+  ## Returns the index of the minimum value of `s`.
+  runnableExamples:
+    import std/sugar
+
+    let s1 = @["foo","bar", "hello"]
+    let s2 = @[2..4, 1..3, 6..10]
+    assert minIndex(s1, proc (a, b: string): int = a.len - b.len) == 0
+    assert minIndex(s2, (a, b) => a.a - b.a) == 1
+
+  for i in 1..high(s):
+    if cmp(s[i], s[result]) < 0: result = i
+
 
 func maxIndex*[T](s: openArray[T]): int {.since: (1, 1).} =
   ## Returns the index of the maximum value of `s`.
@@ -240,10 +299,59 @@ func maxIndex*[T](s: openArray[T]): int {.since: (1, 1).} =
     assert maxIndex(b) == 0
     assert maxIndex(c) == 2
     assert maxIndex(d) == 0
-
+  result = 0
   for i in 1..high(s):
     if s[i] > s[result]: result = i
 
+func maxIndex*[T](s: openArray[T], cmp: proc(a, b: T): int): int {.effectsOf: cmp.} =
+  ## Returns the index of the maximum value of `s`.
+  runnableExamples:
+    import std/sugar
+
+    let s1 = @["foo","bar", "hello"]
+    let s2 = @[2..4, 1..3, 6..10]
+    assert maxIndex(s1, proc (a, b: string): int = a.len - b.len) == 2
+    assert maxIndex(s2, (a, b) => a.a - b.a) == 2
+
+  for i in 1..high(s):
+    if cmp(s[result], s[i]) < 0: result = i
+
+func minmax*[T](x: openArray[T]): (T, T) =
+  ## The minimum and maximum values of `x`. `T` needs to have a `<` operator.
+  var l = x[0]
+  var h = x[0]
+  for i in 1..high(x):
+    if x[i] < l: l = x[i]
+    elif h < x[i]: h = x[i]
+  result = (l, h)
+
+func minmax*[T](x: openArray[T], cmp: proc(a, b: T): int): (T, T) {.effectsOf: cmp.} =
+  ## The minimum and maximum values of `x`.
+  result = (x[0], x[0])
+  for i in 1..high(x):
+    if cmp(x[i], result[0]) < 0: result[0] = x[i]
+    elif cmp(result[1], x[i]) < 0: result[1] = x[i]
+
+
+template findIt*(s, predicate: untyped): int =
+  ## Iterates through a container and returns the index of the first item that
+  ## fulfills the predicate, or -1
+  ##
+  ## Unlike the `find`, the predicate needs to be an expression using
+  ## the `it` variable for testing, like: `findIt([3, 2, 1], it == 2)`.
+  var
+    res = -1
+    i = 0
+
+  # We must use items here since both `find` and `anyIt` are defined in terms
+  # of `items`
+  # (and not `pairs`)
+  for it {.inject.} in items(s):
+    if predicate:
+      res = i
+      break
+    unCheckedInc(i)
+  res
 
 template zipImpl(s1, s2, retType: untyped): untyped =
   proc zip*[S, T](s1: openArray[S], s2: openArray[T]): retType =
@@ -298,8 +406,7 @@ proc unzip*[S, T](s: openArray[(S, T)]): (seq[S], seq[T]) {.since: (1, 1).} =
       unzipped2 = @['a', 'b', 'c']
     assert zipped.unzip() == (unzipped1, unzipped2)
     assert zip(unzipped1, unzipped2).unzip() == (unzipped1, unzipped2)
-  result[0] = newSeq[S](s.len)
-  result[1] = newSeq[T](s.len)
+  result = (newSeq[S](s.len), newSeq[T](s.len))
   for i in 0..<s.len:
     result[0][i] = s[i][0]
     result[1][i] = s[i][1]
@@ -342,7 +449,7 @@ func distribute*[T](s: seq[T], num: Positive, spread = true): seq[seq[T]] =
 
   if extra == 0 or spread == false:
     # Use an algorithm which overcounts the stride and minimizes reading limits.
-    if extra > 0: inc(stride)
+    if extra > 0: unCheckedInc(stride)
     for i in 0 ..< num:
       result[i] = newSeq[T]()
       for g in first ..< min(s.len, first + stride):
@@ -354,7 +461,7 @@ func distribute*[T](s: seq[T], num: Positive, spread = true): seq[seq[T]] =
       last = first + stride
       if extra > 0:
         extra -= 1
-        inc(last)
+        unCheckedInc(last)
       result[i] = newSeq[T]()
       for g in first ..< last:
         result[i].add(s[g])
@@ -511,7 +618,7 @@ proc keepIf*[T](s: var seq[T], pred: proc(x: T): bool {.closure.})
           s[pos] = move(s[i])
         else:
           shallowCopy(s[pos], s[i])
-      inc(pos)
+      unCheckedInc(pos)
   setLen(s, pos)
 
 func delete*[T](s: var seq[T]; slice: Slice[int]) =
@@ -542,8 +649,8 @@ func delete*[T](s: var seq[T]; slice: Slice[int]) =
           s[i] = move(s[j])
         else:
           s[i].shallowCopy(s[j])
-        inc(i)
-        inc(j)
+        unCheckedInc(i)
+        unCheckedInc(j)
       setLen(s, newLen)
     when nimvm: defaultImpl()
     else:
@@ -574,8 +681,8 @@ func delete*[T](s: var seq[T]; first, last: Natural) {.deprecated: "use `delete(
       s[i] = move(s[j])
     else:
       s[i].shallowCopy(s[j])
-    inc(i)
-    inc(j)
+    unCheckedInc(i)
+    unCheckedInc(j)
   setLen(s, newLen)
 
 func insert*[T](dest: var seq[T], src: openArray[T], pos = 0) =
@@ -606,10 +713,10 @@ func insert*[T](dest: var seq[T], src: openArray[T], pos = 0) =
     dec(i)
     dec(j)
   # Insert items from `dest` into `dest` at `pos`
-  inc(j)
+  unCheckedInc(j)
   for item in src:
     dest[j] = item
-    inc(j)
+    unCheckedInc(j)
 
 
 template filterIt*(s, pred: untyped): untyped =
@@ -640,7 +747,7 @@ template filterIt*(s, pred: untyped): untyped =
   var result = newSeq[typeof(s[0])]()
   for it {.inject.} in items(s):
     if pred: result.add(it)
-  result
+  move result
 
 template keepItIf*(varSeq: seq, pred: untyped) =
   ## Keeps the items in the passed sequence (must be declared as a `var`)
@@ -668,7 +775,7 @@ template keepItIf*(varSeq: seq, pred: untyped) =
           varSeq[pos] = move(varSeq[i])
         else:
           shallowCopy(varSeq[pos], varSeq[i])
-      inc(pos)
+      unCheckedInc(pos)
   setLen(varSeq, pos)
 
 since (1, 1):
@@ -767,12 +874,7 @@ template anyIt*(s, pred: untyped): bool =
     assert numbers.anyIt(it > 8) == true
     assert numbers.anyIt(it > 9) == false
 
-  var result = false
-  for it {.inject.} in items(s):
-    if pred:
-      result = true
-      break
-  result
+  findIt(s, pred) != -1
 
 template toSeq1(s: not iterator): untyped =
   # overload for typed but not iterator
@@ -787,7 +889,7 @@ template toSeq1(s: not iterator): untyped =
         i += 1
       result
   else:
-    var result: seq[OutType] = @[]
+    var result: seq[OutType]# = @[]
     for it in s:
       result.add(it)
     result
@@ -800,11 +902,11 @@ template toSeq2(iter: iterator): untyped =
     var result = newSeq[typeof(iter2)](iter2.len)
     for x in iter2:
       result[i] = x
-      inc i
+      unCheckedInc i
     result
   else:
     type OutType = typeof(iter2())
-    var result: seq[OutType] = @[]
+    var result: seq[OutType]# = @[]
     when compiles(iter2()):
       evalOnceAs(iter4, iter, false)
       let iter3 = iter4()
@@ -845,7 +947,7 @@ template toSeq*(iter: untyped): untyped =
         var i = 0
         for x in iter2:
           result[i] = x
-          inc i
+          unCheckedInc i
         result
     else:
       var result: seq[typeof(iter)] = @[]
@@ -910,7 +1012,7 @@ template foldl*(sequence, operation, first): untyped =
   ##
   ## The `operation` parameter should be an expression which uses the variables
   ## `a` and `b` for each step of the fold. The `first` parameter is the
-  ## start value (the first `a`) and therefor defines the type of the result.
+  ## start value (the first `a`) and therefore defines the type of the result.
   ##
   ## **See also:**
   ## * `foldr template<#foldr.t,untyped,untyped>`_
@@ -997,7 +1099,7 @@ template mapIt*(s: typed, op: untyped): untyped =
 
   type OutType = typeof((
     block:
-      var it{.inject.}: typeof(items(s), typeOfIter);
+      var it{.inject, used.}: typeof(items(s), typeOfIter);
       op), typeOfProc)
   when OutType is not (proc):
     # Here, we avoid to create closures in loops.
@@ -1010,13 +1112,13 @@ template mapIt*(s: typed, op: untyped): untyped =
         evalOnceAs(s2, s, compiles((let _ = s)))
 
         var i = 0
-        var result = newSeq[OutType](s2.len)
+        var result = newSeqForOverwrite(OutType, s2.len)
         for it {.inject.} in s2:
           result[i] = op
           i += 1
         result
     else:
-      var result: seq[OutType] = @[]
+      var result: seq[OutType]# = @[]
       # use `items` to avoid https://github.com/nim-lang/Nim/issues/12639
       for it {.inject.} in items(s):
         result.add(op)
@@ -1074,9 +1176,10 @@ template newSeqWith*(len: int, init: untyped): untyped =
     import std/random
     var seqRand = newSeqWith(20, rand(1.0))
     assert seqRand[0] != seqRand[1]
-
-  var result = newSeq[typeof(init)](len)
-  for i in 0 ..< len:
+  type T = typeof(init)
+  let newLen = len
+  var result = newSeqForOverwrite(T, newLen)
+  for i in 0 ..< newLen:
     result[i] = init
   move(result) # refs bug #7295
 

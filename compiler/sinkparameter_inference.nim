@@ -19,7 +19,6 @@ proc checkForSink*(config: ConfigRef; idgen: IdGenerator; owner: PSym; arg: PNod
     var local = p # sink parameter?
     passToSink(local)
   ]#
-  if optSinkInference notin config.options: return
   case arg.kind
   of nkSym:
     if arg.sym.kind == skParam and
@@ -32,21 +31,22 @@ proc checkForSink*(config: ConfigRef; idgen: IdGenerator; owner: PSym; arg: PNod
       if sfWasForwarded notin owner.flags:
         let argType = arg.sym.typ
 
-        let sinkType = newType(tySink, nextTypeId(idgen), owner)
+        let sinkType = newType(tySink, idgen, owner)
         sinkType.size = argType.size
         sinkType.align = argType.align
         sinkType.paddingAtEnd = argType.paddingAtEnd
         sinkType.add argType
 
         arg.sym.typ = sinkType
-        owner.typ[arg.sym.position+1] = sinkType
+        assert owner.typ.n[arg.sym.position+1].sym == arg.sym
 
         #message(config, arg.info, warnUser,
         #  ("turned '$1' to a sink parameter") % [$arg])
         #echo config $ arg.info, " turned into a sink parameter ", arg.sym.name.s
       elif sfWasForwarded notin arg.sym.flags:
         # we only report every potential 'sink' parameter only once:
-        incl arg.sym.flags, sfWasForwarded
+        ensureMutable arg.sym
+        incl arg.sym.flagsImpl, sfWasForwarded
         message(config, arg.info, hintPerformance,
           "could not turn '$1' to a sink parameter" % [arg.sym.name.s])
       #echo config $ arg.info, " candidate for a sink parameter here"

@@ -19,7 +19,7 @@ const
 
 # Inspired by https://engineering.fb.com/2013/03/15/developer-tools/three-optimization-tips-for-c
 # Generates:
-# .. code-block:: nim
+#   ```nim
 #   var res = ""
 #   for i in 0 .. 99:
 #     if i < 10:
@@ -27,34 +27,40 @@ const
 #     else:
 #       res.add $i
 #   doAssert res == digits100
+#   ```
 
-proc utoa2Digits*(buf: var openArray[char]; pos: int; digits: uint32) {.inline.} =
+{.push checks: off, stackTrace: off.}
+
+when not defined(nimHasEnforceNoRaises):
+  {.pragma: enforceNoRaises.}
+
+proc utoa2Digits*(buf: var openArray[char]; pos: int; digits: uint32) {.inline, enforceNoRaises.} =
   buf[pos] = digits100[2 * digits]
   buf[pos+1] = digits100[2 * digits + 1]
   #copyMem(buf, unsafeAddr(digits100[2 * digits]), 2 * sizeof((char)))
 
-proc trailingZeros2Digits*(digits: uint32): int32 {.inline.} =
-  return trailingZeros100[digits]
+proc trailingZeros2Digits*(digits: uint32): int {.inline, enforceNoRaises.} =
+  trailingZeros100[digits]
 
 when defined(js):
   proc numToString(a: SomeInteger): cstring {.importjs: "((#) + \"\")".}
 
-func addChars[T](result: var string, x: T, start: int, n: int) {.inline.} =
+func addChars[T](result: var string, x: T, start: int, n: int) {.inline, enforceNoRaises.} =
   let old = result.len
   result.setLen old + n
   template impl =
     for i in 0..<n: result[old + i] = x[start + i]
   when nimvm: impl
   else:
-    when defined(js) or defined(nimscript): impl
+    when defined(js) or defined(nimscript) or defined(nimsso): impl
     else:
       {.noSideEffect.}:
         copyMem result[old].addr, x[start].unsafeAddr, n
 
-func addChars[T](result: var string, x: T) {.inline.} =
+func addChars[T](result: var string, x: T) {.inline, enforceNoRaises.} =
   addChars(result, x, 0, x.len)
 
-func addIntImpl(result: var string, x: uint64) {.inline.} =
+func addIntImpl(result: var string, x: uint64) {.inline, enforceNoRaises.} =
   var tmp {.noinit.}: array[24, char]
   var num = x
   var next = tmp.len - 1
@@ -63,14 +69,14 @@ func addIntImpl(result: var string, x: uint64) {.inline.} =
   while num >= nbatch:
     let originNum = num
     num = num div nbatch
-    let index = (originNum - num * nbatch) shl 1
+    let index = int16((originNum - num * nbatch) shl 1)
     tmp[next] = digits100[index + 1]
     tmp[next - 1] = digits100[index]
     dec(next, 2)
 
   # process last 1-2 digits
   if num < 10:
-    tmp[next] = chr(ord('0') + num)
+    tmp[next] = chr(ord('0') + num.uint8)
   else:
     let index = num * 2
     tmp[next] = digits100[index + 1]
@@ -78,8 +84,6 @@ func addIntImpl(result: var string, x: uint64) {.inline.} =
     dec next
   addChars(result, tmp, next, tmp.len - next)
 
-when not defined(nimHasEnforceNoRaises):
-  {.pragma: enforceNoRaises.}
 
 func addInt*(result: var string, x: uint64) {.enforceNoRaises.} =
   when nimvm: addIntImpl(result, x)
@@ -101,9 +105,7 @@ proc addInt*(result: var string; x: int64) {.enforceNoRaises.} =
         num = cast[uint64](x)
       else:
         num = uint64(-x)
-      let base = result.len
-      setLen(result, base + 1)
-      result[base] = '-'
+      result.add '-'
     else:
       num = uint64(x)
     addInt(result, num)
@@ -115,3 +117,5 @@ proc addInt*(result: var string; x: int64) {.enforceNoRaises.} =
 
 proc addInt*(result: var string; x: int) {.inline, enforceNoRaises.} =
   addInt(result, int64(x))
+
+{.pop.}

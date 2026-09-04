@@ -12,7 +12,7 @@
 # However, the interface has been designed to take platform differences into
 # account and been ported to all major platforms.
 
-{.push stack_trace: off.}
+{.push stack_trace: off, checks: off.}
 
 const
   NilLibHandle: LibHandle = nil
@@ -47,19 +47,19 @@ proc nimLoadLibraryError(path: string) =
         copyMem(msg[msgIdx].addr, badExe.cstring, badExe.len)
       discard MessageBoxA(nil, msg[0].addr, nil, 0)
   cstderr.rawWrite("\n")
-  quit(1)
+  rawQuit(1)
 
 proc procAddrError(name: cstring) {.compilerproc, nonReloadable, hcrInline.} =
   # carefully written to avoid memory allocation:
   cstderr.rawWrite("could not import: ")
   cstderr.rawWrite(name)
   cstderr.rawWrite("\n")
-  quit(1)
+  rawQuit(1)
 
 # this code was inspired from Lua's source code:
 # Lua - An Extensible Extension Language
 # Tecgraf: Computer Graphics Technology Group, PUC-Rio, Brazil
-# http://www.lua.org
+# https://www.lua.org
 # mailto:info@lua.org
 
 when defined(posix):
@@ -73,11 +73,18 @@ when defined(posix):
   #
 
   # c stuff:
-  when defined(linux) or defined(macosx):
-    const RTLD_NOW = cint(2)
+  when defined(linux):
+    const
+      RTLD_NOW = cint(2)
+      RTLD_GLOBAL = cint(0x100)
+  elif defined(macosx):
+    const
+      RTLD_NOW = cint(2)
+      RTLD_GLOBAL = cint(0x8)
   else:
     var
       RTLD_NOW {.importc: "RTLD_NOW", header: "<dlfcn.h>".}: cint
+      RTLD_GLOBAL {.importc: "RTLD_GLOBAL", header: "<dlfcn.h>".}: cint
 
   proc dlclose(lib: LibHandle) {.importc, header: "<dlfcn.h>".}
   proc dlopen(path: cstring, mode: cint): LibHandle {.
@@ -161,7 +168,7 @@ elif defined(windows) or defined(dos):
         dec(m)
         k = k div 10
         if k == 0: break
-      result = getProcAddress(cast[THINSTANCE](lib), addr decorated)
+      result = getProcAddress(cast[THINSTANCE](lib), cast[cstring](addr decorated))
       if result != nil: return
     procAddrError(name)
 
@@ -176,23 +183,23 @@ elif defined(genode):
   proc nimGetProcAddr(lib: LibHandle, name: cstring): ProcAddr =
     raiseAssert("nimGetProcAddr not implemented")
 
-elif defined(nintendoswitch) or defined(freertos) or defined(zephyr):
+elif defined(nintendoswitch) or defined(freertos) or defined(zephyr) or defined(nuttx):
   proc nimUnloadLibrary(lib: LibHandle) =
     cstderr.rawWrite("nimUnLoadLibrary not implemented")
     cstderr.rawWrite("\n")
-    quit(1)
+    rawQuit(1)
 
   proc nimLoadLibrary(path: string): LibHandle =
     cstderr.rawWrite("nimLoadLibrary not implemented")
     cstderr.rawWrite("\n")
-    quit(1)
+    rawQuit(1)
 
 
   proc nimGetProcAddr(lib: LibHandle, name: cstring): ProcAddr =
     cstderr.rawWrite("nimGetProAddr not implemented")
     cstderr.rawWrite(name)
     cstderr.rawWrite("\n")
-    quit(1)
+    rawQuit(1)
 
 else:
   {.error: "no implementation for dyncalls".}

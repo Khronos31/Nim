@@ -1,6 +1,14 @@
+discard """
+  # test C with -d:nimUseCppAtomics as well to check nothing breaks
+  matrix: "--mm:refc; --mm:orc; --mm:refc -d:nimUseCppAtomics; --mm:orc -d:nimUseCppAtomics"
+  targets: "c cpp"
+"""
+
 # test atomic operations
 
 import std/[atomics, bitops]
+import std/assertions
+
 
 type
   Object = object
@@ -41,7 +49,7 @@ block trivialExchange:
   doAssert location.load == 6
 
 
-block trivialCompareExchangeDoesExchange:
+block trivialCompareExchangeDoesExchange: # bug #26027
   var location: Atomic[int]
   var expected = 1
   location.store(1)
@@ -107,11 +115,11 @@ block trivialCompareExchangeSuccessFailureDoesExchange:
   doAssert expected == 3
   doAssert location.load == 4
   expected = 4
-  doAssert location.compareExchange(expected, 5, moRelease, moRelease)
+  doAssert location.compareExchange(expected, 5, moRelease, moRelaxed)
   doAssert expected == 4
   doAssert location.load == 5
   expected = 5
-  doAssert location.compareExchange(expected, 6, moAcquireRelease, moAcquireRelease)
+  doAssert location.compareExchange(expected, 6, moAcquireRelease, moAcquire)
   doAssert expected == 5
   doAssert location.load == 6
 
@@ -132,11 +140,11 @@ block trivialCompareExchangeSuccessFailureDoesNotExchange:
   doAssert expected == 1
   doAssert location.load == 1
   expected = 10
-  doAssert not location.compareExchange(expected, 5, moRelease, moRelease)
+  doAssert not location.compareExchange(expected, 5, moRelease, moRelaxed)
   doAssert expected == 1
   doAssert location.load == 1
   expected = 10
-  doAssert not location.compareExchange(expected, 6, moAcquireRelease, moAcquireRelease)
+  doAssert not location.compareExchange(expected, 6, moAcquireRelease, moAcquire)
   doAssert expected == 1
   doAssert location.load == 1
 
@@ -207,11 +215,11 @@ block trivialCompareExchangeWeakSuccessFailureDoesExchange:
   doAssert expected == 3
   doAssert location.load == 4
   expected = 4
-  doAssert location.compareExchangeWeak(expected, 5, moRelease, moRelease)
+  doAssert location.compareExchangeWeak(expected, 5, moRelease, moRelaxed)
   doAssert expected == 4
   doAssert location.load == 5
   expected = 5
-  doAssert location.compareExchangeWeak(expected, 6, moAcquireRelease, moAcquireRelease)
+  doAssert location.compareExchangeWeak(expected, 6, moAcquireRelease, moAcquire)
   doAssert expected == 5
   doAssert location.load == 6
 
@@ -232,11 +240,11 @@ block trivialCompareExchangeWeakSuccessFailureDoesNotExchange:
   doAssert expected == 1
   doAssert location.load == 1
   expected = 10
-  doAssert not location.compareExchangeWeak(expected, 5, moRelease, moRelease)
+  doAssert not location.compareExchangeWeak(expected, 5, moRelease, moRelaxed)
   doAssert expected == 1
   doAssert location.load == 1
   expected = 10
-  doAssert not location.compareExchangeWeak(expected, 6, moAcquireRelease, moAcquireRelease)
+  doAssert not location.compareExchangeWeak(expected, 6, moAcquireRelease, moAcquire)
   doAssert expected == 1
   doAssert location.load == 1
 
@@ -341,11 +349,11 @@ block objectCompareExchangeSuccessFailureDoesExchange:
   doAssert expected == Object(val: 3)
   doAssert location.load == Object(val: 4)
   expected = Object(val: 4)
-  doAssert location.compareExchange(expected, Object(val: 5), moRelease, moRelease)
+  doAssert location.compareExchange(expected, Object(val: 5), moRelease, moRelaxed)
   doAssert expected == Object(val: 4)
   doAssert location.load == Object(val: 5)
   expected = Object(val: 5)
-  doAssert location.compareExchange(expected, Object(val: 6), moAcquireRelease, moAcquireRelease)
+  doAssert location.compareExchange(expected, Object(val: 6), moAcquireRelease, moAcquire)
   doAssert expected == Object(val: 5)
   doAssert location.load == Object(val: 6)
 
@@ -366,11 +374,11 @@ block objectCompareExchangeSuccessFailureDoesNotExchange:
   doAssert expected == Object(val: 1)
   doAssert location.load == Object(val: 1)
   expected = Object(val: 10)
-  doAssert not location.compareExchange(expected, Object(val: 5), moRelease, moRelease)
+  doAssert not location.compareExchange(expected, Object(val: 5), moRelease, moRelaxed)
   doAssert expected == Object(val: 1)
   doAssert location.load == Object(val: 1)
   expected = Object(val: 10)
-  doAssert not location.compareExchange(expected, Object(val: 6), moAcquireRelease, moAcquireRelease)
+  doAssert not location.compareExchange(expected, Object(val: 6), moAcquireRelease, moAcquire)
   doAssert expected == Object(val: 1)
   doAssert location.load == Object(val: 1)
 
@@ -441,11 +449,11 @@ block objectCompareExchangeWeakSuccessFailureDoesExchange:
   doAssert expected == Object(val: 3)
   doAssert location.load == Object(val: 4)
   expected = Object(val: 4)
-  doAssert location.compareExchangeWeak(expected, Object(val: 5), moRelease, moRelease)
+  doAssert location.compareExchangeWeak(expected, Object(val: 5), moRelease, moRelaxed)
   doAssert expected == Object(val: 4)
   doAssert location.load == Object(val: 5)
   expected = Object(val: 5)
-  doAssert location.compareExchangeWeak(expected, Object(val: 6), moAcquireRelease, moAcquireRelease)
+  doAssert location.compareExchangeWeak(expected, Object(val: 6), moAcquireRelease, moAcquire)
   doAssert expected == Object(val: 5)
   doAssert location.load == Object(val: 6)
 
@@ -466,11 +474,11 @@ block objectCompareExchangeWeakSuccessFailureDoesNotExchange:
   doAssert expected == Object(val: 1)
   doAssert location.load == Object(val: 1)
   expected = Object(val: 10)
-  doAssert not location.compareExchangeWeak(expected, Object(val: 5), moRelease, moRelease)
+  doAssert not location.compareExchangeWeak(expected, Object(val: 5), moRelease, moRelaxed)
   doAssert expected == Object(val: 1)
   doAssert location.load == Object(val: 1)
   expected = Object(val: 10)
-  doAssert not location.compareExchangeWeak(expected, Object(val: 6), moAcquireRelease, moAcquireRelease)
+  doAssert not location.compareExchangeWeak(expected, Object(val: 6), moAcquireRelease, moAcquire)
   doAssert expected == Object(val: 1)
   doAssert location.load == Object(val: 1)
 

@@ -1,4 +1,5 @@
 discard """
+  matrix: "--mm:refc; --mm:orc; --exceptions:goto"
   targets: "c cpp js"
   output: '''
 PEG AST traversal output
@@ -54,7 +55,7 @@ Event parser output
 when defined(nimHasEffectsOf):
   {.experimental: "strictEffects".}
 
-import std/[strutils, streams, pegs]
+import std/[strutils, streams, pegs, assertions]
 
 const
   indent = "  "
@@ -106,9 +107,9 @@ block:
 
 block:
   var
-    pStack: seq[string] = @[]
-    valStack: seq[float] = @[]
-    opStack = ""
+    pStack {.threadvar.}: seq[string]
+    valStack {.threadvar.}: seq[float]
+    opStack {.threadvar.}: string
   let
     parseArithExpr = pegAst.eventParser:
       pkNonTerminal:
@@ -158,6 +159,10 @@ block:
     privateAccess(NonTerminal)
     privateAccess(Captures)
 
+    if "test" =~ peg"s <- {{\ident}}": # bug #19104
+      doAssert matches[0] == "test"
+      doAssert matches[1] == "test", $matches[1]
+
     doAssert escapePeg("abc''def'") == r"'abc'\x27\x27'def'\x27"
     doAssert match("(a b c)", peg"'(' @ ')'")
     doAssert match("W_HI_Le", peg"\y 'while'")
@@ -187,7 +192,7 @@ block:
     expr.rule = sequence(capture(ident), *sequence(
                   nonterminal(ws), term('+'), nonterminal(ws), nonterminal(expr)))
 
-    var c: Captures
+    var c: Captures = default(Captures)
     var s = "a+b +  c +d+e+f"
     doAssert rawMatch(s, expr.rule, 0, c) == len(s)
     var a = ""
@@ -203,7 +208,7 @@ block:
     doAssert match("_______ana", peg"A <- 'ana' / . A")
     doAssert match("abcs%%%", peg"A <- ..A / .A / '%'")
 
-    var matches: array[0..MaxSubpatterns-1, string]
+    var matches: array[0..MaxSubpatterns-1, string] = default(array[0..MaxSubpatterns-1, string])
     if "abc" =~ peg"{'a'}'bc' 'xyz' / {\ident}":
       doAssert matches[0] == "abc"
     else:
@@ -253,6 +258,11 @@ block:
     doAssert match("eine übersicht und auerdem", peg"(\lower \white*)+")
     doAssert match("EINE ÜBERSICHT UND AUSSERDEM", peg"(\upper \white*)+")
     doAssert(not match("456678", peg"(\letter)+"))
+
+    block:
+      doAssert match("CAFÉ", peg"\i café")
+      doAssert match("Café", peg"\i café")
+      doAssert "two cafés: Café and CAFÉ".findAll(peg"\i café").len == 3
 
     doAssert("var1 = key; var2 = key2".replacef(
       peg"\skip(\s*) {\ident}'='{\ident}", "$1<-$2$2") ==
@@ -320,11 +330,62 @@ block:
   call()
 call()
 """
-      var c: Captures
+      var c: Captures = default(Captures)
       doAssert program.len == program.rawMatch(grammar, 0, c)
       doAssert c.ml == 1
+
+    block:
+      # bug #21632
+
+      let p = peg"""
+        atext <- \w / \d
+      """
+
+      doAssert "a".match(p)
+      doAssert "1".match(p)
 
   pegsTest()
   static:
     pegsTest()
 
+block: # pegs shouldn't crash for invalid inputs but raise EInvalidPeg
+  var captures: array[20, string]
+
+  # star of an expression that can match the empty input used to abort with
+  # AssertionDefect("unreachable") from `*`; the matcher breaks out of the
+  # repetition loop on a zero-length match, so these are valid and terminate:
+  doAssert "aaa".match(peg"(! '>' .)* * $")
+  doAssert "aaa".match(peg"'a'? * $")
+  doAssert "aaa".match(peg".* * $")
+  doAssert "aaa".match(peg"('a'*)* $")
+  doAssert "aaa".match(peg"{a*} * $")
+  doAssert "aaa".match(peg"'a'? + $")
+  doAssert "aaa".match(peg"'a'* * $")
+  doAssert "aaa".match(peg"[a-c]* * $")
+  # the zero-length break in the matcher's repetition loop is load-bearing
+  # here; pin the empty-input behavior and the not-matching path that
+  # forces the break (a regression to zero-width looping would hang these):
+  doAssert "".match(peg"'a'? * $")
+  doAssert "".match(peg".* * $")
+  var greedyCaps: array[8, string]
+  doAssert "aaa".match(peg"{a?} *", greedyCaps)
+  doAssert greedyCaps[0] == "a" and greedyCaps[1] == "a" and
+      greedyCaps[2] == "a"
+  doAssert not "b".match(peg"^('a'?)* $")
+  doAssert not "aab".match(peg"^('a'?)* $")
+  # the internal DSL `*` proc takes the same code path:
+  doAssert match("a", sequence(startAnchor(), *(?term("a")), endAnchor()))
+  # `$` representations remain parseable with identical meaning:
+  doAssert $peg"'a'? *" == "'a'?*"
+  doAssert $peg"('a' 'b')? *" == "('a' 'b')?*"
+
+  # an unknown builtin escape inside a character class doesn't crash with
+  # IndexDefect in getCharSet
+  doAssertRaises(EInvalidPeg): discard peg"[^\n]"
+  doAssertRaises(EInvalidPeg): discard peg"[z-\n]"
+
+  # an empty capture with no previous capture doesn't underflow c.matches
+  doAssert "abc".match(peg"^{}")
+  # documented behavior (deleting the last capture) still works:
+  doAssert "ab".match(peg"{[a-z]} {}", captures)
+  doAssert captures[0] == ""

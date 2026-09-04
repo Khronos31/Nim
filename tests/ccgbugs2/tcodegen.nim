@@ -26,3 +26,64 @@ block: # NRVO2
   let innerAddress = x.innerAddress
   let outerAddress = cast[uint](x.addr)
   doAssert(innerAddress == outerAddress) # [OK]
+
+block: # bug #22354
+  type Object = object
+    foo: int
+
+  proc takeFoo(self: var Object): int =
+    result = self.foo
+    self.foo = 999
+
+  proc doSomething(self: var Object; foo: int = self.takeFoo()) =
+    discard
+
+  proc main() =
+    var obj = Object(foo: 2)
+    obj.doSomething()
+    doAssert obj.foo == 999
+
+
+  main()
+
+proc main = # bug #24677
+  let NULL = 1
+  doAssert NULL == 1
+
+  var COMMA = 1
+  doAssert COMMA == 1
+
+  for NDEBUG in 0..2:
+    doAssert NDEBUG == NDEBUG
+main()
+
+block: # importc type inheritance
+  type
+    A {.inheritable, pure, bycopy, importc: "int".} = object
+    B {.importc: "int", bycopy.} = object of A
+
+  {.emit: """
+  int foo(int a) {
+    return 123;
+  }
+  """.}
+
+  proc foo(a: A): B {.importc, nodecl.}
+
+  var a: A
+  var b = foo(a)
+  doAssert(cast[cint](b) == 123)
+  var c = foo(b)
+  doAssert(cast[cint](c) == 123)
+
+block: # bug #25945
+  var stateRefund = 0
+  let authCode =
+    if true:
+      if false:
+        stateRefund += 0
+      @[]
+    else:
+      @([1.byte])
+
+discard (if true: (discard; @[]) else: @[0])

@@ -1,4 +1,6 @@
-proc succ*[T: Ordinal](x: T, y = 1): T {.magic: "Succ", noSideEffect.} =
+{.push stack_trace: off.}
+
+proc succ*[T: Ordinal, V: SomeInteger](x: T, y: V = 1): T {.magic: "Succ", noSideEffect.} =
   ## Returns the `y`-th successor (default: 1) of the value `x`.
   ##
   ## If such a value does not exist, `OverflowDefect` is raised
@@ -7,7 +9,7 @@ proc succ*[T: Ordinal](x: T, y = 1): T {.magic: "Succ", noSideEffect.} =
     assert succ(5) == 6
     assert succ(5, 3) == 8
 
-proc pred*[T: Ordinal](x: T, y = 1): T {.magic: "Pred", noSideEffect.} =
+proc pred*[T: Ordinal, V: SomeInteger](x: T, y: V = 1): T {.magic: "Pred", noSideEffect.} =
   ## Returns the `y`-th predecessor (default: 1) of the value `x`.
   ##
   ## If such a value does not exist, `OverflowDefect` is raised
@@ -16,7 +18,7 @@ proc pred*[T: Ordinal](x: T, y = 1): T {.magic: "Pred", noSideEffect.} =
     assert pred(5) == 4
     assert pred(5, 3) == 2
 
-proc inc*[T: Ordinal](x: var T, y = 1) {.magic: "Inc", noSideEffect.} =
+proc inc*[T: Ordinal, V: SomeInteger](x: var T, y: V = 1) {.magic: "Inc", noSideEffect.} =
   ## Increments the ordinal `x` by `y`.
   ##
   ## If such a value does not exist, `OverflowDefect` is raised or a compile
@@ -28,7 +30,7 @@ proc inc*[T: Ordinal](x: var T, y = 1) {.magic: "Inc", noSideEffect.} =
     inc(i, 3)
     assert i == 6
 
-proc dec*[T: Ordinal](x: var T, y = 1) {.magic: "Dec", noSideEffect.} =
+proc dec*[T: Ordinal, V: SomeInteger](x: var T, y: V = 1) {.magic: "Dec", noSideEffect.} =
   ## Decrements the ordinal `x` by `y`.
   ##
   ## If such a value does not exist, `OverflowDefect` is raised or a compile
@@ -44,109 +46,6 @@ proc dec*[T: Ordinal](x: var T, y = 1) {.magic: "Dec", noSideEffect.} =
 
 # --------------------------------------------------------------------------
 # built-in operators
-
-when defined(nimNoZeroExtendMagic):
-  proc ze*(x: int8): int {.deprecated.} =
-    ## zero extends a smaller integer type to `int`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int](uint(cast[uint8](x)))
-
-  proc ze*(x: int16): int {.deprecated.} =
-    ## zero extends a smaller integer type to `int`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int](uint(cast[uint16](x)))
-
-  proc ze64*(x: int8): int64 {.deprecated.} =
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int64](uint64(cast[uint8](x)))
-
-  proc ze64*(x: int16): int64 {.deprecated.} =
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int64](uint64(cast[uint16](x)))
-
-  proc ze64*(x: int32): int64 {.deprecated.} =
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int64](uint64(cast[uint32](x)))
-
-  proc ze64*(x: int): int64 {.deprecated.} =
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned. Does nothing if the size of an `int` is the same as `int64`.
-    ## (This is the case on 64 bit processors.)
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int64](uint64(cast[uint](x)))
-
-  proc toU8*(x: int): int8 {.deprecated.} =
-    ## treats `x` as unsigned and converts it to a byte by taking the last 8 bits
-    ## from `x`.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int8](x)
-
-  proc toU16*(x: int): int16 {.deprecated.} =
-    ## treats `x` as unsigned and converts it to an `int16` by taking the last
-    ## 16 bits from `x`.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int16](x)
-
-  proc toU32*(x: int64): int32 {.deprecated.} =
-    ## treats `x` as unsigned and converts it to an `int32` by taking the
-    ## last 32 bits from `x`.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-    cast[int32](x)
-
-elif not defined(js):
-  proc ze*(x: int8): int {.magic: "Ze8ToI", noSideEffect, deprecated.}
-    ## zero extends a smaller integer type to `int`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc ze*(x: int16): int {.magic: "Ze16ToI", noSideEffect, deprecated.}
-    ## zero extends a smaller integer type to `int`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc ze64*(x: int8): int64 {.magic: "Ze8ToI64", noSideEffect, deprecated.}
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc ze64*(x: int16): int64 {.magic: "Ze16ToI64", noSideEffect, deprecated.}
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc ze64*(x: int32): int64 {.magic: "Ze32ToI64", noSideEffect, deprecated.}
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc ze64*(x: int): int64 {.magic: "ZeIToI64", noSideEffect, deprecated.}
-    ## zero extends a smaller integer type to `int64`. This treats `x` as
-    ## unsigned. Does nothing if the size of an `int` is the same as `int64`.
-    ## (This is the case on 64 bit processors.)
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc toU8*(x: int): int8 {.magic: "ToU8", noSideEffect, deprecated.}
-    ## treats `x` as unsigned and converts it to a byte by taking the last 8 bits
-    ## from `x`.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc toU16*(x: int): int16 {.magic: "ToU16", noSideEffect, deprecated.}
-    ## treats `x` as unsigned and converts it to an `int16` by taking the last
-    ## 16 bits from `x`.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
-
-  proc toU32*(x: int64): int32 {.magic: "ToU32", noSideEffect, deprecated.}
-    ## treats `x` as unsigned and converts it to an `int32` by taking the
-    ## last 32 bits from `x`.
-    ## **Deprecated since version 0.19.9**: Use unsigned integers instead.
 
 # integer calculations:
 proc `+`*(x: int): int {.magic: "UnaryPlusI", noSideEffect.}
@@ -196,7 +95,7 @@ proc `*`*(x, y: int16): int16 {.magic: "MulI", noSideEffect.}
 proc `*`*(x, y: int32): int32 {.magic: "MulI", noSideEffect.}
 proc `*`*(x, y: int64): int64 {.magic: "MulI", noSideEffect.}
 
-proc `div`*(x, y: int): int {.magic: "DivI", noSideEffect.} = 
+proc `div`*(x, y: int): int {.magic: "DivI", noSideEffect.} =
   ## Computes the integer division.
   ##
   ## This is roughly the same as `math.trunc(x/y).int`.
@@ -237,7 +136,10 @@ when defined(nimOldShiftRight):
 else:
   proc `shr`*(x: int, y: SomeInteger): int {.magic: "AshrI", noSideEffect.} =
     ## Computes the `shift right` operation of `x` and `y`, filling
-    ## vacant bit positions with the sign bit.
+    ## vacant bit positions with the sign bit. `y` (the number of
+    ## positions to shift) is reduced to modulo `sizeof(x) * 8`.
+    ## That is `15'i32 shr 35` is equivalent to `15'i32 shr 3`
+    ## bitmasked to always be in the range `0 ..< sizeof(int)`.
     ##
     ## **Note**: `Operator precedence <manual.html#syntax-precedence>`_
     ## is different than in *C*.
@@ -259,7 +161,9 @@ else:
 
 
 proc `shl`*(x: int, y: SomeInteger): int {.magic: "ShlI", noSideEffect.} =
-  ## Computes the `shift left` operation of `x` and `y`.
+  ## Computes the `shift left` operation of `x` and `y`. `y` (the number of
+  ## positions to shift) is reduced to modulo `sizeof(x) * 8`.
+  ## That is `15'i32 shl 35` is equivalent to `15'i32 shl 3`.
   ##
   ## **Note**: `Operator precedence <manual.html#syntax-precedence>`_
   ## is different than in *C*.
@@ -273,7 +177,9 @@ proc `shl`*(x: int64, y: SomeInteger): int64 {.magic: "ShlI", noSideEffect.}
 
 proc ashr*(x: int, y: SomeInteger): int {.magic: "AshrI", noSideEffect.} =
   ## Shifts right by pushing copies of the leftmost bit in from the left,
-  ## and let the rightmost bits fall off.
+  ## and let the rightmost bits fall off. `y` (the number of
+  ## positions to shift) is reduced to modulo `sizeof(x) * 8`.
+  ## That is `ashr(15'i32, 35)` is equivalent to `ashr(15'i32, 3)`.
   ##
   ## Note that `ashr` is not an operator so use the normal function
   ## call syntax for it.
@@ -282,7 +188,7 @@ proc ashr*(x: int, y: SomeInteger): int {.magic: "AshrI", noSideEffect.} =
   ## * `shr func<#shr,int,SomeInteger>`_
   runnableExamples:
     assert ashr(0b0001_0000'i8, 2) == 0b0000_0100'i8
-    assert ashr(0b1000_0000'i8, 8) == 0b1111_1111'i8
+    assert ashr(0b1000_0000'i8, 8) == 0b1000_0000'i8
     assert ashr(0b1000_0000'i8, 1) == 0b1100_0000'i8
 proc ashr*(x: int8, y: SomeInteger): int8 {.magic: "AshrI", noSideEffect.}
 proc ashr*(x: int16, y: SomeInteger): int16 {.magic: "AshrI", noSideEffect.}
@@ -399,6 +305,61 @@ proc `mod`*(x, y: uint16): uint16 {.magic: "ModU", noSideEffect.}
 proc `mod`*(x, y: uint32): uint32 {.magic: "ModU", noSideEffect.}
 proc `mod`*(x, y: uint64): uint64 {.magic: "ModU", noSideEffect.}
 
+proc `+=`*[T: SomeInteger](x: var T, y: T) {.
+  magic: "Inc", noSideEffect, systemRaisesDefect.}
+  ## Increments an integer.
+
+proc `-=`*[T: SomeInteger](x: var T, y: T) {.
+  magic: "Dec", noSideEffect, systemRaisesDefect.}
+  ## Decrements an integer.
+
+proc `*=`*[T: SomeInteger](x: var T, y: T) {.
+  inline, noSideEffect, systemRaisesDefect.} =
+  ## Binary `*=` operator for integers.
+  x = x * y
+
+# floating point operations:
+proc `+`*(x: float32): float32 {.magic: "UnaryPlusF64", noSideEffect.}
+proc `-`*(x: float32): float32 {.magic: "UnaryMinusF64", noSideEffect.}
+proc `+`*(x, y: float32): float32 {.magic: "AddF64", noSideEffect.}
+proc `-`*(x, y: float32): float32 {.magic: "SubF64", noSideEffect.}
+proc `*`*(x, y: float32): float32 {.magic: "MulF64", noSideEffect.}
+proc `/`*(x, y: float32): float32 {.magic: "DivF64", noSideEffect.}
+
+proc `+`*(x: float): float {.magic: "UnaryPlusF64", noSideEffect.}
+proc `-`*(x: float): float {.magic: "UnaryMinusF64", noSideEffect.}
+proc `+`*(x, y: float): float {.magic: "AddF64", noSideEffect.}
+proc `-`*(x, y: float): float {.magic: "SubF64", noSideEffect.}
+proc `*`*(x, y: float): float {.magic: "MulF64", noSideEffect.}
+proc `/`*(x, y: float): float {.magic: "DivF64", noSideEffect.}
+
+proc `+=`*[T: float|float32|float64] (x: var T, y: T) {.
+  inline, noSideEffect.} =
+  ## Increments in place a floating point number.
+  x = x + y
+
+proc `-=`*[T: float|float32|float64] (x: var T, y: T) {.
+  inline, noSideEffect, systemRaisesDefect.} =
+  ## Decrements in place a floating point number.
+  x = x - y
+
+proc `*=`*[T: float|float32|float64] (x: var T, y: T) {.
+  inline, noSideEffect, systemRaisesDefect.} =
+  ## Multiplies in place a floating point number.
+  x = x * y
+
+proc `/=`*(x: var float64, y: float64) {.
+  inline, noSideEffect, systemRaisesDefect.} =
+  ## Divides in place a floating point number.
+  x = x / y
+
+proc `/=`*[T: float|float32](x: var T, y: T) {.
+  inline, noSideEffect, systemRaisesDefect.} =
+  ## Divides in place a floating point number.
+  x = x / y
+
+# the following have to be included in system, not imported for some reason:
+
 proc `+%`*(x, y: int): int {.inline.} =
   ## Treats `x` and `y` as unsigned and adds them.
   ##
@@ -454,15 +415,4 @@ proc `%%`*(x, y: int16): int16 {.inline.} = cast[int16](cast[uint16](x) mod cast
 proc `%%`*(x, y: int32): int32 {.inline.} = cast[int32](cast[uint32](x) mod cast[uint32](y))
 proc `%%`*(x, y: int64): int64 {.inline.} = cast[int64](cast[uint64](x) mod cast[uint64](y))
 
-proc `+=`*[T: SomeInteger](x: var T, y: T) {.
-  magic: "Inc", noSideEffect.}
-  ## Increments an integer.
-
-proc `-=`*[T: SomeInteger](x: var T, y: T) {.
-  magic: "Dec", noSideEffect.}
-  ## Decrements an integer.
-
-proc `*=`*[T: SomeInteger](x: var T, y: T) {.
-  inline, noSideEffect.} =
-  ## Binary `*=` operator for integers.
-  x = x * y
+{.pop.}

@@ -1,3 +1,4 @@
+{.push raises: [], gcsafe.}
 
 when defined(windows):
   const goLib = "libgo.dll"
@@ -11,7 +12,6 @@ proc GC_disable() = discard
 proc GC_enable() = discard
 proc go_gc() {.importc: "go_gc", dynlib: goLib.}
 proc GC_fullCollect() = go_gc()
-proc GC_setStrategy(strategy: GC_Strategy) = discard
 proc GC_enableMarkAndSweep() = discard
 proc GC_disableMarkAndSweep() = discard
 
@@ -109,7 +109,7 @@ proc newSeqRC1(typ: PNimType, len: int): pointer {.compilerRtl.} =
   writebarrierptr(addr(result), newSeq(typ, len))
 
 proc nimNewSeqOfCap(typ: PNimType, cap: int): pointer {.compilerproc.} =
-  result = newObj(typ, align(GenericSeqSize, typ.base.align) + cap * typ.base.size)
+  result = newObjNoInit(typ, align(GenericSeqSize, typ.base.align) + cap * typ.base.size)
   cast[PGenericSeq](result).len = 0
   cast[PGenericSeq](result).reserved = cap
   cast[PGenericSeq](result).elemSize = typ.base.size
@@ -151,3 +151,5 @@ proc alloc0(r: var MemRegion, size: int): pointer =
 proc dealloc(r: var MemRegion, p: pointer) = dealloc(p)
 proc deallocOsPages(r: var MemRegion) {.inline.} = discard
 proc deallocOsPages() {.inline.} = discard
+
+{.pop.}

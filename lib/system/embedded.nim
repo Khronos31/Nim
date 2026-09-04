@@ -19,10 +19,12 @@ proc nimFrame(s: PFrame) {.compilerRtl, inl, exportc: "nimFrame".} = discard
 proc popFrame {.compilerRtl, inl.} = discard
 
 proc setFrame(s: PFrame) {.compilerRtl, inl.} = discard
-proc pushSafePoint(s: PSafePoint) {.compilerRtl, inl.} = discard
-proc popSafePoint {.compilerRtl, inl.} = discard
+when not gotoBasedExceptions:
+  proc pushSafePoint(s: PSafePoint) {.compilerRtl, inl.} = discard
+  proc popSafePoint {.compilerRtl, inl.} = discard
 proc pushCurrentException(e: ref Exception) {.compilerRtl, inl.} = discard
 proc popCurrentException {.compilerRtl, inl.} = discard
+proc closureIterSetExc(e: ref Exception) {.compilerRtl, inl.} = discard
 
 # some platforms have native support for stack traces:
 const
@@ -41,13 +43,13 @@ proc raiseExceptionEx(e: sink(ref Exception), ename, procname, filename: cstring
 proc reraiseException() {.compilerRtl.} =
   sysFatal(ReraiseDefect, "no exception to reraise")
 
+proc raiseDefect() {.compilerRtl.} =
+  sysFatal(ReraiseDefect, "exception handling is not available")
+
 proc writeStackTrace() = discard
 
 proc unsetControlCHook() = discard
 proc setControlCHook(hook: proc () {.noconv.}) = discard
-
-proc closureIterSetupExc(e: ref Exception) {.compilerproc, inline.} =
-  sysFatal(ReraiseDefect, "exception handling is not available")
 
 when gotoBasedExceptions:
   var nimInErrorMode {.threadvar.}: bool

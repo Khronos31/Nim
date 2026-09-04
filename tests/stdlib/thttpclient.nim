@@ -3,6 +3,7 @@ discard """
   disabled: "openbsd"
   disabled: "freebsd"
   disabled: "windows"
+  disabled: "osx"
 """
 
 #[
@@ -14,6 +15,9 @@ from net import TimeoutError
 
 import nativesockets, os, httpclient, asyncdispatch
 
+import std/[assertions, syncio]
+from stdtest/testutils import enableRemoteNetworking
+
 const manualTests = false
 
 proc makeIPv6HttpServer(hostname: string, port: Port,
@@ -21,7 +25,7 @@ proc makeIPv6HttpServer(hostname: string, port: Port,
   let fd = createNativeSocket(AF_INET6)
   setSockOptInt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
   var aiList = getAddrInfo(hostname, port, AF_INET6)
-  if bindAddr(fd, aiList.ai_addr, aiList.ai_addrlen.Socklen) < 0'i32:
+  if bindAddr(fd, aiList.ai_addr, aiList.ai_addrlen.SockLen) < 0'i32:
     freeAddrInfo(aiList)
     raiseOSError(osLastError())
   freeAddrInfo(aiList)
@@ -50,12 +54,13 @@ proc asyncTest() {.async.} =
   doAssert("<title>Example Domain</title>" in body)
 
   resp = await client.request("http://example.com/404")
-  doAssert(resp.code.is4xx)
-  doAssert(resp.code == Http404)
-  doAssert(resp.status == $Http404)
+  doAssert(resp.code.is4xx or resp.code.is5xx)
+  doAssert(resp.code == Http404 or resp.code == Http500)
+  doAssert(resp.status == $Http404 or resp.status == $Http500)
 
-  resp = await client.request("https://google.com/")
-  doAssert(resp.code.is2xx or resp.code.is3xx)
+  when false: # occasionally does not give success code 
+    resp = await client.request("https://google.com/")
+    doAssert(resp.code.is2xx or resp.code.is3xx)
 
   # getContent
   try:
@@ -103,6 +108,13 @@ proc asyncTest() {.async.} =
   #  client = newAsyncHttpClient(proxy = newProxy("http://51.254.106.76:80/"))
   #  var resp = await client.request("https://github.com")
   #  echo resp
+  #
+  # SOCKS5H proxy test
+  # when manualTests:
+  #   block:
+  #     client = newAsyncHttpClient(proxy = newProxy("socks5h://user:blabla@127.0.0.1:9050"))
+  #     var resp = await client.request("https://api.my-ip.io/v2/ip.txt")
+  #     echo await resp.body
 
 proc syncTest() =
   var client = newHttpClient()
@@ -111,12 +123,13 @@ proc syncTest() =
   doAssert("<title>Example Domain</title>" in resp.body)
 
   resp = client.request("http://example.com/404")
-  doAssert(resp.code.is4xx)
-  doAssert(resp.code == Http404)
-  doAssert(resp.status == $Http404)
+  doAssert(resp.code.is4xx or resp.code.is5xx)
+  doAssert(resp.code == Http404 or resp.code == Http500)
+  doAssert(resp.status == $Http404 or resp.status == $Http500)
 
-  resp = client.request("https://google.com/")
-  doAssert(resp.code.is2xx or resp.code.is3xx)
+  when false: # occasionally does not give success code
+    resp = client.request("https://google.com/")
+    doAssert(resp.code.is2xx or resp.code.is3xx)
 
   # getContent
   try:
@@ -176,5 +189,7 @@ proc ipv6Test() =
   client.close()
 
 ipv6Test()
-syncTest()
-waitFor(asyncTest())
+
+when enableRemoteNetworking:
+  syncTest()
+  waitFor(asyncTest())

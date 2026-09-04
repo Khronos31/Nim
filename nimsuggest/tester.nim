@@ -5,7 +5,7 @@
 # When debugging, to run a single test, use for e.g.:
 # `nim r nimsuggest/tester.nim nimsuggest/tests/tsug_accquote.nim`
 
-import os, osproc, strutils, streams, re, sexp, net
+import os, osproc, strutils, streams, sexp, net
 from sequtils import toSeq
 
 type
@@ -21,6 +21,14 @@ const
   # we could also use `stdtest/specialpaths`
 
 import std/compilesettings
+
+# nimsuggest's incremental (NIF/IC) mode is opt-in via `--ideImports:nif`. By default
+# nimsuggest recompiles the import closure from source (cmdCheck), which is fast and
+# stable, so the whole suite runs that path. Only the tests listed below exercise the
+# IC path; running every test under IC dominated the suite's wall-clock (each test
+# recompiles `system` cold into NIF, plus a few warm-cache-only ordering/highlight
+# quirks) and blew CI's job timeout.
+const icTests = ["tic.nim", "tv3_import.nim"]
 
 proc parseTest(filename: string; epcMode=false): Test =
   const cursorMarker = "#[!]#"
@@ -66,7 +74,7 @@ proc parseTest(filename: string; epcMode=false): Test =
       elif x.startsWith(">"):
         # since 'markers' here are not complete yet, we do the $substitutions
         # afterwards
-        result.script.add((x.substr(1).replaceWord("$path", tpath), ""))
+        result.script.add((x.substr(1).replaceWord("$path", tpath).replaceWord("$file", filename), ""))
       elif x.len > 0:
         # expected output line:
         let x = x % ["file", filename, "lib", libpath]
@@ -74,6 +82,14 @@ proc parseTest(filename: string; epcMode=false): Test =
         # else: ignore empty lines for better readability of the specs
     inc i
   tmp.close()
+  # The IC tests opt into the NIF path and get their own private cache. The stdio
+  # variant (epcMode=false) starts cold and writes the NIFs; the EPC variant reuses
+  # them warm, so a single test exercises both the NIF write and the NIF read path.
+  if extractFilename(filename) in icTests:
+    let nimcache = getTempDir() / ("nimsuggest_ic_" &
+      extractFilename(result.dest).changeFileExt(""))
+    if not epcMode: removeDir(nimcache)
+    result.cmd.add " --ideImports:nif --nimcache:" & nimcache
   # now that we know the markers, substitute them:
   for a in mitems(result.script):
     a[0] = a[0] % markers
@@ -148,8 +164,28 @@ proc runCmd(cmd, dest: string): bool =
     quit "unknown command: " & cmd
 
 proc smartCompare(pattern, x: string): bool =
-  if pattern.contains('*'):
-    result = match(x, re(escapeRe(pattern).replace("\\x2A","(.*)"), {}))
+  let pp = splitLines(pattern.strip())
+  let xx = splitLines(x.strip())
+  if pp.len > xx.len:
+    return false
+  for l in 0..pp.len-1:
+    let p = pp[l].split('\t')
+    let x = xx[l].split('\t')
+    if p.len > x.len:
+      return false
+    for i in 0..p.len-1:
+      let starAt = p[i].find('*')
+      if starAt >= 0:
+        if p[i] == "*":
+          discard "field exists, that is good enough"
+        elif x[i].startsWith(p[i].substr(0, starAt-1)) and x[i].endsWith(p[i].substr(starAt+1)):
+          discard
+        else:
+          return false
+      else:
+        if x[i] != p[i]:
+          return false
+  return true
 
 proc sendEpcStr(socket: Socket; cmd: string) =
   let s = cmd.find(' ')
@@ -218,7 +254,12 @@ proc sexpToAnswer(s: SexpNode): string =
       result.add doc
       result.add '\t'
       result.addInt a[8].getNum
-      if a.len >= 10:
+      if a.len >= 11:
+        result.add '\t'
+        result.addInt a[9].getNum
+        result.add '\t'
+        result.addInt a[10].getNum
+      elif a.len >= 10:
         result.add '\t'
         result.add a[9].getStr
     result.add '\L'
@@ -229,8 +270,8 @@ proc doReport(filename, answer, resp: string; report: var string) =
     var hasDiff = false
     for i in 0..min(resp.len-1, answer.len-1):
       if resp[i] != answer[i]:
-        report.add "\n  Expected:  " & resp.substr(i, i+200)
-        report.add "\n  But got:   " & answer.substr(i, i+200)
+        report.add "\n  Expected:\n" & resp
+        report.add "\n  But got:\n" & answer
         hasDiff = true
         break
     if not hasDiff:
@@ -252,7 +293,10 @@ proc runEpcTest(filename: string): int =
   for cmd in s.startup:
     if not runCmd(cmd, s.dest):
       quit "invalid command: " & cmd
-  let epccmd = s.cmd.replace("--tester", "--epc --v2 --log")
+  let epccmd = if s.cmd.contains("--v3"):
+    s.cmd.replace("--tester", "--epc --log")
+  else:
+    s.cmd.replace("--tester", "--epc --v2 --log")
   let cl = parseCmdLine(epccmd)
   var p = startProcess(command=cl[0], args=cl[1 .. ^1],
                        options={poStdErrToStdOut, poUsePath,
@@ -271,7 +315,13 @@ proc runEpcTest(filename: string): int =
         os.sleep(50)
         inc i
       let a = outp.readAll().strip()
-    let port = parseInt(a)
+    var port: int
+    try:
+      port = parseInt(a)
+    except ValueError:
+      echo "Error parsing port number: " & a
+      echo outp.readAll()
+      quit 1
     socket.connect("localhost", Port(port))
 
     for req, resp in items(s.script):
@@ -279,7 +329,7 @@ proc runEpcTest(filename: string): int =
         socket.sendEpcStr(req)
         let sx = parseSexp(socket.recvEpc())
         if not req.startsWith("mod "):
-          let answer = sexpToAnswer(sx)
+          let answer = if sx[2].kind == SNil: "" else: sexpToAnswer(sx)
           doReport(filename, answer, resp, report)
 
     socket.sendEpcStr "return arg"
@@ -339,8 +389,8 @@ proc main() =
   if os.paramCount() > 0:
     let x = os.paramStr(1)
     let xx = expandFilename x
+    # run only stdio when running single test
     failures += runTest(xx)
-    failures += runEpcTest(xx)
   else:
     let files = toSeq(walkFiles(tpath / "t*.nim"))
     for i, x in files:

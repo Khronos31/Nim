@@ -107,6 +107,18 @@ template main() =
         return (x,y)
     doAssert bar() == (10, (11,))
 
+  block: # bug #16331
+    type T1 = tuple[a, b: int]
+
+    proc p(b: bool): T1 =
+      var x: T1 = (10, 20)
+      x = if b: (x.b, x.a) else: (-x.b, -x.a)
+      x
+
+    doAssert p(false) == (-20, -10)
+    doAssert p(true) == (20, 10)
+
+
 proc mainProc() =
   # other tests should be in `main`
   block:
@@ -119,3 +131,47 @@ static:
 
 main()
 mainProc()
+
+
+block:
+  type
+    Tuple[N] = tuple
+      a: int
+      b: N
+
+    TupleVoid = Tuple[void]
+
+  var x: TupleVoid = (a: 1, )
+  doAssert x.a == 1
+
+block:
+  type W[N] = seq[tuple[b: N]]
+  var _: W[void]
+
+block:
+  type Tuple2[N] = tuple
+    a: int
+    b: N
+    c: int
+
+  var y: Tuple2[void] = (a: 10, c: 20)
+  doAssert y.a == 10
+  doAssert y.c == 20
+
+block:
+  type Outer[N] = tuple
+    inner: tuple[x: int, y: N]
+
+  var o: Outer[void] = (inner: (x: 3, ))
+  doAssert o.inner.x == 3
+
+block:
+  type Tup[T] = tuple
+    a: int
+    b: T
+
+  proc f[T](t: Tup[T]): int =
+    result = t.a
+
+  var z: Tup[void] = (a: 7, )
+  doAssert f(z) == 7

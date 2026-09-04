@@ -7,6 +7,8 @@
 #    distribution, for details about the copyright.
 #
 
+{.push raises: [], gcsafe.}
+
 proc roundup(x, v: int): int {.inline.} =
   result = (x + (v-1)) and not (v-1)
   sysAssert(result >= x, "roundup: result < x")
@@ -29,8 +31,8 @@ const doNotUnmap = not (defined(amd64) or defined(i386)) or
 
 
 when defined(nimAllocPagesViaMalloc):
-  when not defined(gcArc) and not defined(gcOrc):
-    {.error: "-d:nimAllocPagesViaMalloc is only supported with --gc:arc or --gc:orc".}
+  when not defined(gcArc) and not defined(gcOrc) and not defined(gcAtomicArc) and not defined(gcYrc):
+    {.error: "-d:nimAllocPagesViaMalloc is only supported with --mm:arc or --mm:atomicArc or --mm:orc or --mm:yrc".}
 
   proc osTryAllocPages(size: int): pointer {.inline.} =
     let base = c_malloc(csize_t size + PageSize - 1 + sizeof(uint32))
@@ -80,14 +82,14 @@ elif defined(emscripten) and not defined(StandaloneHeapSize):
     let pos = cast[int](result)
 
     # Convert pointer to PageSize correct one.
-    var new_pos = cast[ByteAddress](pos) +% (PageSize - (pos %% PageSize))
+    var new_pos = cast[int](pos) +% (PageSize - (pos %% PageSize))
     if (new_pos-pos) < sizeof(EmscriptenMMapBlock):
       new_pos = new_pos +% PageSize
     result = cast[pointer](new_pos)
 
-    var mmapDescrPos = cast[ByteAddress](result) -% sizeof(EmscriptenMMapBlock)
+    var mmapDescrPos = cast[int](result) -% sizeof(EmscriptenMMapBlock)
 
-    var mmapDescr = cast[EmscriptenMMapBlock](mmapDescrPos)
+    var mmapDescr = cast[PEmscriptenMMapBlock](mmapDescrPos)
     mmapDescr.realSize = realSize
     mmapDescr.realPointer = realPointer
 
@@ -96,8 +98,8 @@ elif defined(emscripten) and not defined(StandaloneHeapSize):
   proc osTryAllocPages(size: int): pointer = osAllocPages(size)
 
   proc osDeallocPages(p: pointer, size: int) {.inline.} =
-    var mmapDescrPos = cast[ByteAddress](p) -% sizeof(EmscriptenMMapBlock)
-    var mmapDescr = cast[EmscriptenMMapBlock](mmapDescrPos)
+    var mmapDescrPos = cast[int](p) -% sizeof(EmscriptenMMapBlock)
+    var mmapDescr = cast[PEmscriptenMMapBlock](mmapDescrPos)
     munmap(mmapDescr.realPointer, mmapDescr.realSize)
 
 elif defined(genode) and not defined(StandaloneHeapSize):
@@ -189,7 +191,7 @@ elif defined(windows) and not defined(StandaloneHeapSize):
     when reallyOsDealloc:
       if virtualFree(p, 0, MEM_RELEASE) == 0:
         cprintf "virtualFree failing!"
-        quit 1
+        rawQuit 1
     #VirtualFree(p, size, MEM_DECOMMIT)
 
 elif hostOS == "standalone" or defined(StandaloneHeapSize):
@@ -216,3 +218,5 @@ elif hostOS == "standalone" or defined(StandaloneHeapSize):
 
 else:
   {.error: "Port memory manager to your platform".}
+
+{.pop.}

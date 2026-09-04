@@ -41,6 +41,7 @@ proc initPtrTable(): PtrTable =
 template deinit(t: PtrTable) = dealloc(t)
 
 proc get(t: PtrTable; key: pointer): pointer =
+  result = nil
   var h = hashPtr(key)
   while true:
     let k = t.data[h and t.max][0]
@@ -57,12 +58,12 @@ proc put(t: var PtrTable; key, val: pointer) =
   inc t.counter
 
 proc genericDeepCopyAux(dest, src: pointer, mt: PNimType;
-                        tab: var PtrTable) {.benign.}
+                        tab: var PtrTable) {.gcsafe.}
 proc genericDeepCopyAux(dest, src: pointer, n: ptr TNimNode;
-                        tab: var PtrTable) {.benign.} =
+                        tab: var PtrTable) {.gcsafe.} =
   var
-    d = cast[ByteAddress](dest)
-    s = cast[ByteAddress](src)
+    d = cast[int](dest)
+    s = cast[int](src)
   case n.kind
   of nkSlot:
     genericDeepCopyAux(cast[pointer](d +% n.offset),
@@ -85,15 +86,20 @@ proc genericDeepCopyAux(dest, src: pointer, n: ptr TNimNode;
 
 proc genericDeepCopyAux(dest, src: pointer, mt: PNimType; tab: var PtrTable) =
   var
-    d = cast[ByteAddress](dest)
-    s = cast[ByteAddress](src)
+    d = cast[int](dest)
+    s = cast[int](src)
   sysAssert(mt != nil, "genericDeepCopyAux 2")
   case mt.kind
   of tyString:
     when defined(nimSeqsV2):
-      var x = cast[ptr NimStringV2](dest)
-      var s2 = cast[ptr NimStringV2](s)[]
-      nimAsgnStrV2(x[], s2)
+      when defined(nimsso):
+        var x = cast[ptr SmallString](dest)
+        var s2 = cast[ptr SmallString](s)[]
+        nimAsgnStrV2(x[], s2)
+      else:
+        var x = cast[ptr NimStringV2](dest)
+        var s2 = cast[ptr NimStringV2](s)[]
+        nimAsgnStrV2(x[], s2)
     else:
       var x = cast[PPointer](dest)
       var s2 = cast[PPointer](s)[]
@@ -113,11 +119,11 @@ proc genericDeepCopyAux(dest, src: pointer, mt: PNimType; tab: var PtrTable) =
         return
       sysAssert(dest != nil, "genericDeepCopyAux 3")
       unsureAsgnRef(x, newSeq(mt, seq.len))
-      var dst = cast[ByteAddress](cast[PPointer](dest)[])
+      var dst = cast[int](cast[PPointer](dest)[])
       for i in 0..seq.len-1:
         genericDeepCopyAux(
           cast[pointer](dst +% align(GenericSeqSize, mt.base.align) +% i *% mt.base.size),
-          cast[pointer](cast[ByteAddress](s2) +% align(GenericSeqSize, mt.base.align) +% i *% mt.base.size),
+          cast[pointer](cast[int](s2) +% align(GenericSeqSize, mt.base.align) +% i *% mt.base.size),
           mt.base, tab)
   of tyObject:
     # we need to copy m_type field for tyObject, as it could be empty for
@@ -199,8 +205,8 @@ proc genericSeqDeepCopy(dest, src: pointer, mt: PNimType) {.compilerproc.} =
 proc genericDeepCopyOpenArray(dest, src: pointer, len: int,
                             mt: PNimType) {.compilerproc.} =
   var
-    d = cast[ByteAddress](dest)
-    s = cast[ByteAddress](src)
+    d = cast[int](dest)
+    s = cast[int](src)
   for i in 0..len-1:
     genericDeepCopy(cast[pointer](d +% i *% mt.base.size),
                     cast[pointer](s +% i *% mt.base.size), mt.base)

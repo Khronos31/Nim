@@ -46,7 +46,7 @@ else:
 proc raiseOutOfMem() {.noinline.} =
   if outOfMemHook != nil: outOfMemHook()
   cstderr.rawWrite("out of memory\n")
-  quit(1)
+  rawQuit(1)
 
 when defined(boehmgc):
   include system / mm / boehm
@@ -55,14 +55,15 @@ elif defined(gogc):
   include system / mm / go
 
 elif (defined(nogc) or defined(gcDestructors)) and defined(useMalloc):
-  include system / mm / malloc
+  when not defined(useNimRtl):
+    include system / mm / malloc
 
   when defined(nogc):
     proc GC_getStatistics(): string = ""
-    proc newObj(typ: PNimType, size: int): pointer {.compilerproc.} =
+    proc newObj(typ: PNimType, size: int): pointer {.compilerproc, raises: [].} =
       result = alloc0(size)
 
-    proc newSeq(typ: PNimType, len: int): pointer {.compilerproc.} =
+    proc newSeq(typ: PNimType, len: int): pointer {.compilerproc, raises: [].} =
       result = newObj(typ, align(GenericSeqSize, typ.align) + len * typ.base.size)
       cast[PGenericSeq](result).len = len
       cast[PGenericSeq](result).reserved = len
@@ -90,7 +91,10 @@ else:
   elif defined(gcMarkAndSweep):
     # XXX use 'compileOption' here
     include "system/gc_ms"
-  else:
+  elif not (defined(nimV2) or usesDestructors):
+    # equivalent to a plain `else` here, but spelled out so that the IC
+    # dependency scanner (which sees `else` imports/includes unguarded)
+    # doesn't schedule system/gc's transitive imports under --mm:orc
     include "system/gc"
 
 when not declared(nimNewSeqOfCap) and not defined(nimSeqsV2):

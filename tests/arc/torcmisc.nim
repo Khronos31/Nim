@@ -56,6 +56,7 @@ type
     peers*: Table[PeerID, PubSubPeer]
 
 proc getOrCreatePeer*(myParam: PubSub, peerId: PeerID, protos: seq[string]): PubSubPeer =
+  result = nil
   myParam.peers.withValue(peerId, peer):
     return peer[]
 
@@ -64,3 +65,17 @@ method handleConn*(myParam: PubSub,
                   proto: string) {.base, async.} =
   myParam.peers.withValue(conn.peerInfo.peerId, peer):
     let peerB = peer[]
+
+
+
+block:
+  type M = object
+
+  proc `=dup`(_: M): M {.error.}
+  proc take(_: sink M) = discard
+
+  proc test() =
+    var value: M
+    take(value)
+
+  test()

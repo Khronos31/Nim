@@ -9,28 +9,31 @@
 
 ## This module implements helper procs for CGI applications. Example:
 ##
-## .. code-block:: Nim
+##   ```Nim
+##   import std/[strtabs, cgi]
 ##
-##    import std/[strtabs, cgi]
-##
-##    # Fill the values when debugging:
-##    when debug:
-##      setTestData("name", "Klaus", "password", "123456")
-##    # read the data into `myData`
-##    var myData = readData()
-##    # check that the data's variable names are "name" or "password"
-##    validateData(myData, "name", "password")
-##    # start generating content:
-##    writeContentType()
-##    # generate content:
-##    write(stdout, "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">\n")
-##    write(stdout, "<html><head><title>Test</title></head><body>\n")
-##    writeLine(stdout, "your name: " & myData["name"])
-##    writeLine(stdout, "your password: " & myData["password"])
-##    writeLine(stdout, "</body></html>")
+##   # Fill the values when debugging:
+##   when debug:
+##     setTestData("name", "Klaus", "password", "123456")
+##   # read the data into `myData`
+##   var myData = readData()
+##   # check that the data's variable names are "name" or "password"
+##   validateData(myData, "name", "password")
+##   # start generating content:
+##   writeContentType()
+##   # generate content:
+##   write(stdout, "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">\n")
+##   write(stdout, "<html><head><title>Test</title></head><body>\n")
+##   writeLine(stdout, "your name: " & myData["name"])
+##   writeLine(stdout, "your password: " & myData["password"])
+##   writeLine(stdout, "</body></html>")
+##   ```
 
-import strutils, os, strtabs, cookies, uri
+import std/[strutils, os, strtabs, cookies, uri]
 export uri.encodeUrl, uri.decodeUrl
+
+when defined(nimPreviewSlimSystem):
+  import std/syncio
 
 
 proc addXmlChar(dest: var string, c: char) {.inline.} =
@@ -80,6 +83,8 @@ proc getEncodedData(allowedMethods: set[RequestMethod]): string =
   else:
     if methodNone notin allowedMethods:
       cgiError("'REQUEST_METHOD' must be 'POST' or 'GET'")
+    else:
+      result = ""
 
 iterator decodeData*(data: string): tuple[key, value: string] =
   ## Reads and decodes CGI data and yields the (name, value) pairs the
@@ -123,7 +128,7 @@ proc getContentLength*(): string =
 
 proc getContentType*(): string =
   ## Returns contents of the `CONTENT_TYPE` environment variable.
-  return getEnv("CONTENT_Type")
+  return getEnv("CONTENT_TYPE")
 
 proc getDocumentRoot*(): string =
   ## Returns contents of the `DOCUMENT_ROOT` environment variable.
@@ -249,9 +254,9 @@ proc setTestData*(keysvalues: varargs[string]) =
   ## Fills the appropriate environment variables to test your CGI application.
   ## This can only simulate the 'GET' request method. `keysvalues` should
   ## provide embedded (name, value)-pairs. Example:
-  ##
-  ## .. code-block:: Nim
-  ##    setTestData("name", "Hanz", "password", "12345")
+  ##   ```Nim
+  ##   setTestData("name", "Hanz", "password", "12345")
+  ##   ```
   putEnv("REQUEST_METHOD", "GET")
   var i = 0
   var query = ""
@@ -266,9 +271,9 @@ proc setTestData*(keysvalues: varargs[string]) =
 proc writeContentType*() =
   ## Calls this before starting to send your HTML data to `stdout`. This
   ## implements this part of the CGI protocol:
-  ##
-  ## .. code-block:: Nim
-  ##     write(stdout, "Content-type: text/html\n\n")
+  ##   ```Nim
+  ##   write(stdout, "Content-type: text/html\n\n")
+  ##   ```
   write(stdout, "Content-type: text/html\n\n")
 
 proc resetForStacktrace() =
@@ -284,11 +289,14 @@ Content-Type: text/html
 proc writeErrorMessage*(data: string) =
   ## Tries to reset browser state and writes `data` to stdout in
   ## <plaintext> tag.
-  resetForStacktrace()
-  # We use <plaintext> here, instead of escaping, so stacktrace can
-  # be understood by human looking at source.
-  stdout.write("<plaintext>\n")
-  stdout.write(data)
+  try:
+    resetForStacktrace()
+    # We use <plaintext> here, instead of escaping, so stacktrace can
+    # be understood by human looking at source.
+    stdout.write("<plaintext>\n")
+    stdout.write(data)
+  except IOError as exc:
+    discard # Too bad..
 
 proc setStackTraceStdout*() =
   ## Makes Nim output stacktraces to stdout, instead of server log.

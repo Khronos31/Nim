@@ -8,20 +8,62 @@
 #
 
 import
-  os, strutils, strtabs, sets, lineinfos, platform,
-  prefixmatches, pathutils, nimpaths, tables
+  lineinfos, platform,
+  prefixmatches, pathutils, nimpaths
 
-from terminal import isatty
-from times import utc, fromUnix, local, getTime, format, DateTime
+import std/[tables, os, strutils, strtabs, sets]
+from std/terminal import isatty
+from std/times import utc, fromUnix, local, getTime, format, DateTime
 from std/private/globs import nativeToUnixPath
+
+when defined(nimPreviewSlimSystem):
+  import std/[syncio, assertions]
+
+
 const
   hasTinyCBackend* = defined(tinyc)
   useEffectSystem* = true
   useWriteTracking* = false
   hasFFI* = defined(nimHasLibFFI)
-  copyrightYear* = "2022"
+  copyrightYear* = "2026"
 
   nimEnableCovariance* = defined(nimEnableCovariance)
+
+  icFormatVersion* = "38"
+    ## Version of the IC cache format (the sem-NIF module layout written by
+    ## ast2nif.nim plus the iface/impl/edges side files). Bump it whenever
+    ## that layout changes: `commandIc` wipes a nimcache whose `ic.version`
+    ## stamp differs, instead of letting a newer reader mis-parse records
+    ## written by an older compiler (nifmake's rebuild check is mtime-only
+    ## and knows nothing about format changes).
+    ## v2: iface cookie hashes routine SIGNATURES only (no inline-semantics
+    ## body folding); body access now records a NeedsImpl edge instead. A v1
+    ## cache mixes body-sensitive and body-insensitive cookies, so it must be
+    ## wiped rather than warm-rebuilt.
+    ## v3: added the `.s.deps` sidecar (real post-sem imports) and switched the
+    ## macro-generated-import discovery from `icmissing.txt` to it.
+    ## v4: backend C-name scheme change — the module suffix is now the trailing
+    ## token (`name_u<disamb>__<suffix>`, was `name__<suffix>_u<disamb>`), so
+    ## cached `.c.nif` artifacts hold incompatible names and must be wiped.
+    ## v5: data definitions (consts, RTTI) are now wrapped in droppable `'d'`
+    ## cdef directives with an always-present extern declaration, so the
+    ## per-module merge stage can assign them a single owner; old `.c.nif`
+    ## artifacts lack the wrappers.
+    ## v6: `signatureHash`/`hashType` of a builtin type class (`object`, `tuple`,
+    ## `proc`, ...) no longer mixes in the placeholder son's process-local type
+    ## id, so its hash is stable across the NIF boundary (was breaking
+    ## nim-serialization's auto-serialization lookup under IC). The sem-NIF
+    ## macrocache entries and baked generic-instance bodies hold the old hashes.
+    ## v7 (=31): anonymous wrapper types (`var T`, `lent T`, `sink T`, tuples)
+    ## are named by their CONTENT instead of `itemId.item`, the module-wide
+    ## type-mint counter (see ast2nif.CanonTypeKinds). Old caches name the same
+    ## type differently, so every `.s.bif` reference would dangle.
+    ## v8 (=32): the same for `tyProc`, except that a proc type which is a
+    ## routine's SIGNATURE is named after that routine rather than by content
+    ## (see ast2nif.sigRoutineOf). Renames types, so old caches dangle again.
+    ## v9 (=33): and for the per-module `int`/`float` LITERAL COPIES (see
+    ## ast2nif.CanonLitCopyKinds), the last mover that broke a build outright
+    ## (`symbol has no offset` out of a cached `.t.bif`). Renames types again.
 
 type                          # please make sure we have under 32 options
                               # (improves code efficiency a lot!)
@@ -44,6 +86,7 @@ type                          # please make sure we have under 32 options
     optSinkInference          # 'sink T' inference
     optCursorInference
     optImportHidden
+    optQuirky
 
   TOptions* = set[TOption]
   TGlobalOption* = enum
@@ -55,11 +98,13 @@ type                          # please make sure we have under 32 options
     optGenStaticLib,          # generate a static library
     optGenGuiApp,             # generate a GUI application
     optGenScript,             # generate a script file to compile the *.c files
+    optGenCDeps,              # generate a list of *.c files to be read by CMake
     optGenMapping,            # generate a mapping file
     optRun,                   # run the compiled project
     optUseNimcache,           # save artifacts (including binary) in $nimcache
     optStyleHint,             # check that the names adhere to NEP-1
     optStyleError,            # enforce that the names adhere to NEP-1
+    optStyleWarning,          # emit style checks as warnings
     optStyleUsages,           # only enforce consistent **usages** of the symbol
     optSkipSystemConfigFile,  # skip the system's cfg/nims config file
     optSkipProjConfigFile,    # skip the project's cfg/nims config file
@@ -72,10 +117,13 @@ type                          # please make sure we have under 32 options
     optThreadAnalysis,        # thread analysis pass
     optTlsEmulation,          # thread var emulation turned on
     optGenIndex               # generate index file for documentation;
+    optGenIndexOnly           # generate only index file for documentation
+    optNoImportdoc            # disable loading external documentation files
     optEmbedOrigSrc           # embed the original source in the generated code
                               # also: generate header file
     optIdeDebug               # idetools: debug mode
     optIdeTerse               # idetools: use terse descriptions
+    optIdeExceptionInlayHints
     optExcessiveStackTrace    # fully qualified module filenames
     optShowAllMismatches      # show all overloading resolution candidates
     optWholeProject           # for 'doc': output any dependency
@@ -94,11 +142,16 @@ type                          # please make sure we have under 32 options
     optBenchmarkVM            # Enables cpuTime() in the VM
     optProduceAsm             # produce assembler code
     optPanics                 # turn panics (sysFatal) into a process termination
-    optNimV1Emulation         # emulate Nim v1.0
-    optNimV12Emulation        # emulate Nim v1.2
     optSourcemap
     optProfileVM              # enable VM profiler
     optEnableDeepCopy         # ORC specific: enable 'deepcopy' for all types.
+    optShowNonExportedFields  # for documentation: show fields that are not exported
+    optJsBigInt64             # use bigints for 64-bit integers in JS
+    optDocRaw                 # for documentation: Don't render markdown for JSON output
+    optItaniumMangle          # mangling follows the Itanium spec
+    optCompress               # turn on AST compression by converting it to NIF
+    optGenBif                 # generate semantic BIF alongside ordinary code generation
+    optWithinConfigSystem     # we still compile within the configuration system
 
   TGlobalOptions* = set[TGlobalOption]
 
@@ -128,25 +181,28 @@ type
     backendCpp = "cpp"
     backendJs = "js"
     backendObjc = "objc"
+    backendNif = "nif"
     # backendNimscript = "nimscript" # this could actually work
     # backendLlvm = "llvm" # probably not well supported; was cmdCompileToLLVM
 
   Command* = enum  ## Nim's commands
     cmdNone # not yet processed command
     cmdUnknown # command unmapped
-    cmdCompileToC, cmdCompileToCpp, cmdCompileToOC, cmdCompileToJS
+    cmdCompileToC, cmdCompileToCpp, cmdCompileToOC, cmdCompileToJS,
     cmdCrun # compile and run in nimache
     cmdTcc # run the project via TCC backend
     cmdCheck # semantic checking for whole project
+    cmdM     # only compile a single
     cmdParse # parse a single file (for debugging)
-    cmdRod # .rod to some text representation (for debugging)
-    cmdIdeTools # ide tools (e.g. nimsuggest)
     cmdNimscript # evaluate nimscript
     cmdDoc0
     cmdDoc      # convert .nim doc comments to HTML
+    cmdBook # generate documentation site from a directory with Markdown files
     cmdDoc2tex  # convert .nim doc comments to LaTeX
     cmdRst2html # convert a reStructuredText file to HTML
     cmdRst2tex # convert a reStructuredText file to TeX
+    cmdMd2html # convert a Markdown file to HTML
+    cmdMd2tex # convert a Markdown file to TeX
     cmdJsondoc0
     cmdJsondoc
     cmdCtags
@@ -156,16 +212,20 @@ type
     cmdInteractive # start interactive session
     cmdNop
     cmdJsonscript # compile a .json build file
-    cmdNimfix
     # old unused: cmdInterpret, cmdDef: def feature (find definition for IDEs)
+    cmdCompileToNif
+    cmdNifC  # generate C code from NIF files
+    cmdIc  # generate .build.nif for nifmake
+    cmdIcConfig # `nim ic`'s precompiled-config producer (writes ic_config.cfg.nif)
+    cmdTrack # `nim track --def/--usages`: IC frontend build + NIF scan for IDE queries
 
 const
-  cmdBackends* = {cmdCompileToC, cmdCompileToCpp, cmdCompileToOC, cmdCompileToJS, cmdCrun}
+  cmdBackends* = {cmdCompileToC, cmdCompileToCpp, cmdCompileToOC,
+                  cmdCompileToJS, cmdCrun, cmdCompileToNif}
   cmdDocLike* = {cmdDoc0, cmdDoc, cmdDoc2tex, cmdJsondoc0, cmdJsondoc,
                  cmdCtags, cmdBuildindex}
 
 type
-  NimVer* = tuple[major: int, minor: int, patch: int]
   TStringSeq* = seq[string]
   TGCMode* = enum             # the selected GC
     gcUnselected = "unselected"
@@ -174,20 +234,21 @@ type
     gcRegions = "regions"
     gcArc = "arc"
     gcOrc = "orc"
+    gcYrc = "yrc"       # thread-safe ORC (concurrent cycle collector)
+    gcAtomicArc = "atomicArc"
     gcMarkAndSweep = "markAndSweep"
     gcHooks = "hooks"
     gcRefc = "refc"
-    gcV2 = "v2"
     gcGo = "go"
     # gcRefc and the GCs that follow it use a write barrier,
     # as far as usesWriteBarrier() is concerned
 
   IdeCmd* = enum
-    ideNone, ideSug, ideCon, ideDef, ideUse, ideDus, ideChk, ideMod,
-    ideHighlight, ideOutline, ideKnown, ideMsg, ideProject
+    ideNone, ideSug, ideCon, ideDef, ideUse, ideDus, ideChk, ideChkFile, ideMod,
+    ideHighlight, ideOutline, ideKnown, ideMsg, ideProject, ideGlobalSymbols,
+    ideRecompile, ideChanged, ideType, ideDeclaration, ideExpand, ideInlayHints
 
   Feature* = enum  ## experimental features; DO NOT RENAME THESE!
-    implicitDeref,
     dotOperators,
     callOperator,
     parallel,
@@ -199,16 +260,24 @@ type
     codeReordering,
     compiletimeFFI,
       ## This requires building nim with `-d:nimHasLibFFI`
-      ## which itself requires `nimble install libffi`, see #10150
+      ## which itself requires `koch installdeps libffi`, see #10150
       ## Note: this feature can't be localized with {.push.}
     vmopsDanger,
     strictFuncs,
     views,
     strictNotNil,
-    overloadableEnums,
+    overloadableEnums, # deadcode
     strictEffects,
-    unicodeOperators,
-    flexibleOptionalParams
+    unicodeOperators, # deadcode
+    flexibleOptionalParams,
+    strictDefs, # deadcode
+    strictCaseObjects,
+    inferGenericTypes,
+    openSym, # remove nfDisabledOpenSym when this is default
+    # alternative to above:
+    genericsOpenSym
+    vtables
+    typeBoundOps
 
   LegacyFeature* = enum
     allowSemcheckedAstModification,
@@ -219,13 +288,35 @@ type
       ## Historically and especially in version 1.0.0 of the language
       ## conversions to unsigned numbers were checked. In 1.0.4 they
       ## are not anymore.
+    laxEffects
+      ## Lax effects system prior to Nim 2.0.
+    verboseTypeMismatch
+    emitGenerics
+      ## generics are emitted in the module that contains them.
+      ## Useful for libraries that rely on local passC
+    jsNoLambdaLifting
+      ## Old transformation for closures in JS backend
+    noPanicOnExcept
+      ## don't panic on bare except
+    procParamTypeBackendAliases
+      ## Keep the old proc type compatibility rules that ignore backend
+      ## c type aliases.
+    injectedSymbolRedefinition
+      ## Allow a template to inject a symbol *definition* that is then emitted
+      ## more than once (e.g. a `typed` argument captured by a `{.dirty.}`
+      ## template and re-emitted). This is a redefinition and rejected by
+      ## default; enabling this restores the old, unsound behavior. See #25693.
 
   SymbolFilesOption* = enum
     disabledSf, writeOnlySf, readOnlySf, v2Sf, stressTest
 
   TSystemCC* = enum
     ccNone, ccGcc, ccNintendoSwitch, ccLLVM_Gcc, ccCLang, ccBcc, ccVcc,
-    ccTcc, ccEnv, ccIcl, ccIcc, ccClangCl
+    ccTcc, ccEnv, ccIcl, ccIcc, ccClangCl, ccHipcc, ccNvcc
+
+  StringsMode* = enum
+    stringDefault = "default"
+    stringSso = "sso"
 
   ExceptionSystem* = enum
     excNone,   # no exception system selected yet
@@ -263,7 +354,26 @@ type
     scope*, localUsages*, globalUsages*: int # more usages is better
     tokenLen*: int
     version*: int
+    endLine*: uint16
+    endCol*: int
+    inlayHintInfo*: SuggestInlayHint
+
   Suggestions* = seq[Suggest]
+
+  SuggestInlayHintKind* = enum
+    sihkType = "Type",
+    sihkParameter = "Parameter"
+    sihkException = "Exception"
+
+  SuggestInlayHint* = ref object
+    kind*: SuggestInlayHintKind
+    line*: int                   # Starts at 1
+    column*: int                 # Starts at 0
+    label*: string
+    paddingLeft*: bool
+    paddingRight*: bool
+    allowInsert*: bool
+    tooltip*: string
 
   ProfileInfo* = object
     time*: float
@@ -302,26 +412,83 @@ type
     evalMacroCounter*: int
     exitcode*: int8
     cmd*: Command  # raw command parsed as enum
+    ideActive*: bool # serving IDE tooling (nimsuggest): collect suggestions and
+                     # keep going after errors. Decoupled from `cmd` so the IDE
+                     # server can run under any compilation mode (cmdCheck, cmdM).
+    ideImportsFromNif*: bool # nimsuggest: load the unchanged import closure from
+                     # precompiled NIF (run under cmdM) instead of recompiling it
+                     # from source (cmdCheck). IC is opt-in: default off (cmdCheck);
+                     # `--ideImports:nif` opts in.
     cmdInput*: string  # input command
     projectIsCmd*: bool # whether we're compiling from a command input
     implicitCmd*: bool # whether some flag triggered an implicit `command`
     selectedGC*: TGCMode       # the selected GC (+)
     exc*: ExceptionSystem
+    selectedStrings*: StringsMode
     hintProcessingDots*: bool # true for dots, false for filenames
     verbosity*: int            # how verbose the compiler is
     numberOfProcessors*: int   # number of processors
     lastCmdTime*: float        # when caas is enabled, we measure each command
     symbolFiles*: SymbolFilesOption
+    ic*: bool # whether ic is enabled
+    icGroup*: HashSet[string] # under `nim m`: absolute paths of the modules in
+                              # this strongly-connected import group. They are all
+                              # compiled from source in one process (so mutual
+                              # recursion resolves in-memory) and each gets its NIF
+                              # written, instead of being loaded from a precompiled
+                              # NIF. See `compiler/deps.nim` (SCC grouping).
+    icProject*: string        # under `nim m`/`nim nifc`: absolute path of the
+                              # ORIGINAL project file. The child's own project file
+                              # is the module being compiled, which would make that
+                              # module's package the "main package" and unfilter
+                              # foreign-package diagnostics; the real project
+                              # restores whole-program filtering semantics.
+    icPreparsedConfig*: string # under the `nim ic` driver and its `nim m`/`nim nifc`
+                              # children: path of the precompiled config artifact.
+                              # When set, `loadConfigs` replays the recorded
+                              # config-file switches from it instead of re-reading
+                              # the `nim.cfg` chain and re-running `config.nims`
+                              # (which the VM makes expensive) per process. The
+                              # artifact itself is produced by a separate
+                              # `nim icconfig` process (see `cmdIcConfig`).
+    icConfigOut*: string      # under `nim icconfig`: the path to write the
+                              # precompiled config artifact to (set via `--o`).
+    icConfigSwitches*: seq[tuple[switch, arg: string]]
+                              # the config-file (`passPP`) switches applied while
+                              # loading config, in order. Recorded by every nim
+                              # process; only the `ic` driver serialises them.
+                              # Path-search switches are excluded — the driver
+                              # forwards the resolved `searchPaths` as `--path`.
+    icBackendStage*: string   # under `nim nifc`: which stage of the per-module
+                              # backend this invocation runs — "cg" (codegen one
+                              # module to its `.c.nif`), "merge" (global liveness
+                              # + owner assignment across all `.c.nif`), "emit"
+                              # (render one module's `.c` from its `.c.nif` + the
+                              # merge decision), "link" (cc + link every emitted
+                              # `.c`). Empty = whole-program backend (load all,
+                              # codegen+DCE+cc+link in one process). The stages
+                              # are wired as nifmake rules by `deps.nim`'s backend
+                              # build file. See `compiler/nifbackend.nim`.
+    icBackendModules*: seq[string]
+                              # under `nim nifc` with icBackendStage in
+                              # {lower,cg,emit}: the NIF module suffixes this
+                              # invocation processes — its BATCH. One entry is
+                              # the per-module fan-out; several share one process
+                              # and therefore ONE dependency-closure load between
+                              # them, which is the whole point (see
+                              # `nifbackend.loadDepClosure`). Every other module
+                              # is loaded only so types resolve; its definitions
+                              # are referenced extern. Empty = the main module.
     spellSuggestMax*: int # max number of spelling suggestions for typos
 
     cppDefines*: HashSet[string] # (*)
     headerFile*: string
+    nimbasePattern*: string # pattern to find nimbase.h
     features*: set[Feature]
     legacyFeatures*: set[LegacyFeature]
     arguments*: string ## the arguments to be passed to the program that
                        ## should be run
     ideCmd*: IdeCmd
-    oldNewlines*: bool
     cCompiler*: TSystemCC # the used compiler
     modifiedyNotes*: TNoteKinds # notes that have been set/unset from either cmdline/configs
     cmdlineNotes*: TNoteKinds # notes that have been set/unset from cmdline
@@ -335,6 +502,7 @@ type
     warnCounter*: int
     errorMax*: int
     maxLoopIterationsVM*: int ## VM: max iterations of all loops
+    maxCallDepthVM*: int ## VM: max call depth
     isVmTrace*: bool
     configVars*: StringTableRef
     symbols*: StringTableRef ## We need to use a StringTableRef here as defined
@@ -348,20 +516,25 @@ type
     outDir*: AbsoluteDir
     jsonBuildFile*: AbsoluteFile
     prefixDir*, libpath*, nimcacheDir*: AbsoluteDir
-    nimStdlibVersion*: NimVer
-    dllOverrides, moduleOverrides*, cfileSpecificOptions*: StringTableRef
+    dllOverrides*, moduleOverrides*, cfileSpecificOptions*: StringTableRef
     projectName*: string # holds a name like 'nim'
     projectPath*: AbsoluteDir # holds a path like /home/alice/projects/nim/compiler/
     projectFull*: AbsoluteFile # projectPath/projectName
     projectIsStdin*: bool # whether we're compiling from stdin
+    stdinFile*: AbsoluteFile # Filename to use in messages for stdin
     lastMsgWasDot*: set[StdOrrKind] # the last compiler message was a single '.'
     projectMainIdx*: FileIndex # the canonical path id of the main module
     projectMainIdx2*: FileIndex # consider merging with projectMainIdx
+    isMainModule*: bool # `nim m`/IC only: whether the single module being
+                        # semantically checked is the program's real entry point.
+                        # Under IC every module is compiled via `nim m` (which sets
+                        # `sfMainModule` so the module writes its own NIF), so
+                        # `sfMainModule` can no longer answer `isMainModule`. The IC
+                        # build file passes `--isMainModule:on` for the root module.
     command*: string # the main command (e.g. cc, check, scan, etc)
     commandArgs*: seq[string] # any arguments after the main command
     commandLine*: string
     extraCmds*: seq[string] # for writeJsonBuildInstructions
-    keepComments*: bool # whether the parser needs to keep comments
     implicitImports*: seq[string] # modules that are to be implicitly imported
     implicitIncludes*: seq[string] # modules that are to be implicitly included
     docSeeSrcUrl*: string # if empty, no seeSrc will be generated. \
@@ -386,22 +559,22 @@ type
     suggestVersion*: int
     suggestMaxResults*: int
     lastLineInfo*: TLineInfo
-    writelnHook*: proc (output: string) {.closure.} # cannot make this gcsafe yet because of Nimble
+    writelnHook*: proc (output: string) {.closure, gcsafe.}
     structuredErrorHook*: proc (config: ConfigRef; info: TLineInfo; msg: string;
                                 severity: Severity) {.closure, gcsafe.}
     cppCustomNamespace*: string
     nimMainPrefix*: string
     vmProfileData*: ProfileData
 
-proc parseNimVersion*(a: string): NimVer =
-  # could be moved somewhere reusable
-  if a.len > 0:
-    let b = a.split(".")
-    assert b.len == 3, a
-    template fn(i) = result[i] = b[i].parseInt # could be optimized if needed
-    fn(0)
-    fn(1)
-    fn(2)
+    expandProgress*: bool
+    expandLevels*: int
+    expandNodeResult*: string
+    expandPosition*: TLineInfo
+
+    currentConfigDir*: string # used for passPP only; absolute dir
+    clientProcessId*: int
+
+
 
 proc assignIfDefault*[T](result: var T, val: T, def = default(T)) =
   ## if `result` was already assigned to a value (that wasn't `def`), this is a noop.
@@ -444,7 +617,7 @@ when false:
     fn(globalOptions)
     fn(selectedGC)
 
-const oldExperimentalFeatures* = {implicitDeref, dotOperators, callOperator, parallel}
+const oldExperimentalFeatures* = {dotOperators, callOperator, parallel}
 
 const
   ChecksOptions* = {optObjCheck, optFieldCheck, optRangeCheck,
@@ -455,7 +628,8 @@ const
     optBoundsCheck, optOverflowCheck, optAssert, optWarns, optRefCheck,
     optHints, optStackTrace, optLineTrace, # consider adding `optStackTraceMsgs`
     optTrMacros, optStyleCheck, optCursorInference}
-  DefaultGlobalOptions* = {optThreadAnalysis, optExcessiveStackTrace}
+  DefaultGlobalOptions* = {optThreadAnalysis, optExcessiveStackTrace,
+    optJsBigInt64, optItaniumMangle}
 
 proc getSrcTimestamp(): DateTime =
   try:
@@ -496,7 +670,7 @@ when defined(nimDebugUtils):
   export debugutils
 
 proc initConfigRefCommon(conf: ConfigRef) =
-  conf.selectedGC = gcRefc
+  conf.selectedGC = gcUnselected
   conf.verbosity = 1
   conf.hintProcessingDots = true
   conf.options = DefaultOptions
@@ -513,6 +687,7 @@ proc newConfigRef*(): ConfigRef =
     arcToExpand: newStringTable(modeStyleInsensitive),
     m: initMsgConfig(),
     cppDefines: initHashSet[string](),
+    icGroup: initHashSet[string](),
     headerFile: "", features: {}, legacyFeatures: {},
     configVars: newStringTable(modeStyleInsensitive),
     symbols: newStringTable(modeStyleInsensitive),
@@ -530,11 +705,12 @@ proc newConfigRef*(): ConfigRef =
     projectPath: AbsoluteDir"", # holds a path like /home/alice/projects/nim/compiler/
     projectFull: AbsoluteFile"", # projectPath/projectName
     projectIsStdin: false, # whether we're compiling from stdin
+    stdinFile: AbsoluteFile"stdinfile",
     projectMainIdx: FileIndex(0'i32), # the canonical path id of the main module
     command: "", # the main command (e.g. cc, check, scan, etc)
     commandArgs: @[], # any arguments after the main command
     commandLine: "",
-    keepComments: true, # whether the parser needs to keep comments
+    ideImportsFromNif: false, # IC opt-in; see `--ideImports`
     implicitImports: @[], # modules that are to be implicitly imported
     implicitIncludes: @[], # modules that are to be implicitly included
     docSeeSrcUrl: "",
@@ -552,8 +728,10 @@ proc newConfigRef*(): ConfigRef =
     arguments: "",
     suggestMaxResults: 10_000,
     maxLoopIterationsVM: 10_000_000,
+    maxCallDepthVM: 2_000,
     vmProfileData: newProfileData(),
     spellSuggestMax: spellSuggestSecretSauce,
+    currentConfigDir: ""
   )
   initConfigRefCommon(result)
   setTargetFromSystem(result.target)
@@ -574,12 +752,6 @@ proc newPartialConfigRef*(): ConfigRef =
 proc cppDefine*(c: ConfigRef; define: string) =
   c.cppDefines.incl define
 
-proc getStdlibVersion*(conf: ConfigRef): NimVer =
-  if conf.nimStdlibVersion == (0,0,0):
-    let s = conf.symbols.getOrDefault("nimVersion", "")
-    conf.nimStdlibVersion = s.parseNimVersion
-  result = conf.nimStdlibVersion
-
 proc isDefined*(conf: ConfigRef; symbol: string): bool =
   if conf.symbols.hasKey(symbol):
     result = true
@@ -592,12 +764,13 @@ proc isDefined*(conf: ConfigRef; symbol: string): bool =
     of "x86": result = conf.target.targetCPU == cpuI386
     of "itanium": result = conf.target.targetCPU == cpuIa64
     of "x8664": result = conf.target.targetCPU == cpuAmd64
+    of "wasm": result = conf.target.targetCPU in {cpuWasm32, cpuWasm64}
     of "posix", "unix":
       result = conf.target.targetOS in {osLinux, osMorphos, osSkyos, osIrix, osPalmos,
                             osQnx, osAtari, osAix,
                             osHaiku, osVxWorks, osSolaris, osNetbsd,
                             osFreebsd, osOpenbsd, osDragonfly, osMacosx, osIos,
-                            osAndroid, osNintendoSwitch, osFreeRTOS, osCrossos, osZephyr}
+                            osAndroid, osNintendoSwitch, osFreeRTOS, osCrossos, osZephyr, osNuttX}
     of "linux":
       result = conf.target.targetOS in {osLinux, osAndroid}
     of "bsd":
@@ -619,6 +792,8 @@ proc isDefined*(conf: ConfigRef; symbol: string): bool =
       result = conf.target.targetOS == osFreeRTOS
     of "zephyr":
       result = conf.target.targetOS == osZephyr
+    of "nuttx":
+      result = conf.target.targetOS == osNuttX
     of "littleendian": result = CPU[conf.target.targetCPU].endian == littleEndian
     of "bigendian": result = CPU[conf.target.targetCPU].endian == bigEndian
     of "cpu8": result = CPU[conf.target.targetCPU].bit == 8
@@ -628,17 +803,29 @@ proc isDefined*(conf: ConfigRef; symbol: string): bool =
     of "nimrawsetjmp":
       result = conf.target.targetOS in {osSolaris, osNetbsd, osFreebsd, osOpenbsd,
                             osDragonfly, osMacosx}
-    else: discard
+    else: result = false
 
 template quitOrRaise*(conf: ConfigRef, msg = "") =
   # xxx in future work, consider whether to also intercept `msgQuit` calls
   if conf.isDefined("nimDebug"):
-    doAssert false, msg
+    raiseAssert msg
   else:
     quit(msg) # quits with QuitFailure
 
-proc importantComments*(conf: ConfigRef): bool {.inline.} = conf.cmd in cmdDocLike + {cmdIdeTools}
+proc icReuseSemLowering*(conf: ConfigRef): bool {.inline.} =
+  ## When ON, the per-module `lower` backend stage REUSES the VM/CT lowering that
+  ## sem cached in the `.s.nif` 2-way-body slot (the non-IC single-lowering
+  ## semantics) instead of re-deriving the transform. Default OFF: the backend
+  ## re-derives every body from the pristine semchecked body (simpler; allowed by
+  ## the 2026-06-27 spec that VM-requested frontend transforms need not influence
+  ## the backend). The switch exists so caching can be restored if a target (e.g.
+  ## Nimbus) depends on the cached lowering being reused, not re-derived. See
+  ## doc/ic_backend_simplify.md §6b.
+  isDefined(conf, "icReuseSemLowering")
+
+proc importantComments*(conf: ConfigRef): bool {.inline.} = conf.ideActive or conf.cmd in cmdDocLike
 proc usesWriteBarrier*(conf: ConfigRef): bool {.inline.} = conf.selectedGC >= gcRefc
+proc usesSso*(conf: ConfigRef): bool {.inline.} = conf.selectedStrings == stringSso
 
 template compilationCachePresent*(conf: ConfigRef): untyped =
   false
@@ -693,22 +880,24 @@ proc getPrefixDir*(conf: ConfigRef): AbsoluteDir =
   ##  clone or using installed nim, so that these exist: `result/doc/advopt.txt`
   ## and `result/lib/system.nim`
   if not conf.prefixDir.isEmpty: result = conf.prefixDir
-  else: result = AbsoluteDir splitPath(getAppDir()).head
+  else:
+    let binParent = AbsoluteDir splitPath(getAppDir()).head
+    when defined(posix):
+      if binParent == AbsoluteDir"/usr":
+        result = AbsoluteDir"/usr/lib/nim"
+      elif binParent == AbsoluteDir"/usr/local":
+        result = AbsoluteDir"/usr/local/lib/nim"
+      else:
+        result = binParent
+    else:
+      result = binParent
 
 proc setDefaultLibpath*(conf: ConfigRef) =
   # set default value (can be overwritten):
   if conf.libpath.isEmpty:
     # choose default libpath:
     var prefix = getPrefixDir(conf)
-    when defined(posix):
-      if prefix == AbsoluteDir"/usr":
-        conf.libpath = AbsoluteDir"/usr/lib/nim"
-      elif prefix == AbsoluteDir"/usr/local":
-        conf.libpath = AbsoluteDir"/usr/local/lib/nim"
-      else:
-        conf.libpath = prefix / RelativeDir"lib"
-    else:
-      conf.libpath = prefix / RelativeDir"lib"
+    conf.libpath = prefix / RelativeDir"lib"
 
     # Special rule to support other tools (nimble) which import the compiler
     # modules and make use of them.
@@ -729,7 +918,10 @@ proc setFromProjectName*(conf: ConfigRef; projectName: string) =
     conf.projectFull = AbsoluteFile projectName
   let p = splitFile(conf.projectFull)
   let dir = if p.dir.isEmpty: AbsoluteDir getCurrentDir() else: p.dir
-  conf.projectPath = AbsoluteDir canonicalizePath(conf, AbsoluteFile dir)
+  try:
+    conf.projectPath = AbsoluteDir canonicalizePath(conf, AbsoluteFile dir)
+  except OSError:
+    conf.projectPath = dir
   conf.projectName = p.name
 
 proc removeTrailingDirSep*(path: string): string =
@@ -755,23 +947,43 @@ proc getOsCacheDir(): string =
   else:
     result = getHomeDir() / genSubDir.string
 
+proc isIcDriver*(conf: ConfigRef): bool =
+  ## True for `nim c --ic:on` / `nim cpp --ic:on`: this process is the `nim ic`
+  ## DRIVER (it builds the nifmake graph and spawns the per-module children),
+  ## not a compilation. `nim ic` itself keeps its own `cmdIc` branch.
+  conf.ic and conf.cmd in {cmdCompileToC, cmdCompileToCpp, cmdCompileToOC}
+
+proc icCFileExt*(conf: ConfigRef): string =
+  ## The extension the per-module backend gives a module's translation unit.
+  ## Mirrors `cgen.getCFile` at BACKEND granularity, which is all the `nim ic`
+  ## driver can know: it DECLARES every module's `.c`/`.cpp` output to nifmake
+  ## without loading a single module, so a per-module `{.compile: cpp.}`
+  ## (`sfCompileToCpp`) is out of reach — and `nim cpp` selects the backend for
+  ## the whole program anyway.
+  case conf.backend
+  of backendCpp: ".nim.cpp"
+  of backendObjc: ".nim.m"
+  else: ".nim.c"
+
 proc getNimcacheDir*(conf: ConfigRef): AbsoluteDir =
   proc nimcacheSuffix(conf: ConfigRef): string =
-    if conf.cmd == cmdCheck: "_check"
+    if conf.ideActive: "_nimsuggest"  # dedicated cache, never shared with `nim c`
+    elif conf.cmd == cmdCheck: "_check"
     elif isDefined(conf, "release") or isDefined(conf, "danger"): "_r"
     else: "_d"
 
   # XXX projectName should always be without a file extension!
-  result = if not conf.nimcacheDir.isEmpty:
-             conf.nimcacheDir
-           elif conf.backend == backendJs:
-             if conf.outDir.isEmpty:
-               conf.projectPath / genSubDir
-             else:
-               conf.outDir / genSubDir
-           else:
-            AbsoluteDir(getOsCacheDir() / splitFile(conf.projectName).name &
-               nimcacheSuffix(conf))
+  result =
+    if not conf.nimcacheDir.isEmpty:
+      conf.nimcacheDir
+    elif conf.backend == backendJs:
+      if conf.outDir.isEmpty:
+        conf.projectPath / genSubDir
+      else:
+        conf.outDir / genSubDir
+    else:
+      AbsoluteDir(getOsCacheDir() / splitFile(conf.projectName).name &
+        nimcacheSuffix(conf))
 
 proc pathSubs*(conf: ConfigRef; p, config: string): string =
   let home = removeTrailingDirSep(os.getHomeDir())
@@ -801,6 +1013,8 @@ proc toGeneratedFile*(conf: ConfigRef; path: AbsoluteFile,
 
 proc completeGeneratedFilePath*(conf: ConfigRef; f: AbsoluteFile,
                                 createSubDir: bool = true): AbsoluteFile =
+  ## Return an absolute path of a generated intermediary file.
+  ## Optionally creates the cache directory if `createSubDir` is `true`.
   let subdir = getNimcacheDir(conf)
   if createSubDir:
     try:
@@ -808,11 +1022,6 @@ proc completeGeneratedFilePath*(conf: ConfigRef; f: AbsoluteFile,
     except OSError:
       conf.quitOrRaise "cannot create directory: " & subdir.string
   result = subdir / RelativeFile f.string.splitPath.tail
-  #echo "completeGeneratedFilePath(", f, ") = ", result
-
-proc toRodFile*(conf: ConfigRef; f: AbsoluteFile; ext = RodExt): AbsoluteFile =
-  result = changeFileExt(completeGeneratedFilePath(conf,
-    withPackageName(conf, f)), ext)
 
 proc rawFindFile(conf: ConfigRef; f: RelativeFile; suppressStdlib: bool): AbsoluteFile =
   for it in conf.searchPaths:
@@ -841,27 +1050,21 @@ template patchModule(conf: ConfigRef) {.dirty.} =
       let ov = conf.moduleOverrides[key]
       if ov.len > 0: result = AbsoluteFile(ov)
 
-when (NimMajor, NimMinor) < (1, 1) or not declared(isRelativeTo):
-  proc isRelativeTo(path, base: string): bool =
-    # pending #13212 use os.isRelativeTo
-    let path = path.normalizedPath
-    let base = base.normalizedPath
-    let ret = relativePath(path, base)
-    result = path.len > 0 and not ret.startsWith ".."
-
-const stdlibDirs = [
+const stdlibDirs* = [
   "pure", "core", "arch",
   "pure/collections",
   "pure/concurrency",
   "pure/unidecode", "impure",
   "wrappers", "wrappers/linenoise",
-  "windows", "posix", "js"]
+  "windows", "posix", "js",
+  "deprecated/pure"]
 
 const
   pkgPrefix = "pkg/"
-  stdPrefix = "std/"
+  stdPrefix* = "std/"
 
 proc getRelativePathFromConfigPath*(conf: ConfigRef; f: AbsoluteFile, isTitle = false): RelativeFile =
+  result = RelativeFile("")
   let f = $f
   if isTitle:
     for dir in stdlibDirs:
@@ -892,10 +1095,12 @@ proc findFile*(conf: ConfigRef; f: string; suppressStdlib = false): AbsoluteFile
 proc findModule*(conf: ConfigRef; modulename, currentModule: string): AbsoluteFile =
   # returns path to module
   var m = addFileExt(modulename, NimExt)
+  var hasRelativeDot = false
   if m.startsWith(pkgPrefix):
     result = findFile(conf, m.substr(pkgPrefix.len), suppressStdlib = true)
   else:
     if m.startsWith(stdPrefix):
+      result = AbsoluteFile("")
       let stripped = m.substr(stdPrefix.len)
       for candidate in stdlibDirs:
         let path = (conf.libpath.string / candidate / stripped)
@@ -905,7 +1110,11 @@ proc findModule*(conf: ConfigRef; modulename, currentModule: string): AbsoluteFi
     else: # If prefixed with std/ why would we add the current module path!
       let currentPath = currentModule.splitFile.dir
       result = AbsoluteFile currentPath / m
-    if not fileExists(result):
+      if m.startsWith('.') and not fileExists(result):
+        result = AbsoluteFile ""
+        hasRelativeDot = true
+
+    if not fileExists(result) and not hasRelativeDot:
       result = findFile(conf, m)
   patchModule(conf)
 
@@ -983,6 +1192,15 @@ proc isDynlibOverride*(conf: ConfigRef; lib: string): bool =
   result = optDynlibOverrideAll in conf.globalOptions or
      conf.dllOverrides.hasKey(lib.canonDynlibName)
 
+proc showNonExportedFields*(conf: ConfigRef) =
+  incl(conf.globalOptions, optShowNonExportedFields)
+
+proc docRawOutput*(conf: ConfigRef) =
+  incl(conf.globalOptions, optDocRaw)
+
+proc expandDone*(conf: ConfigRef): bool =
+  result = conf.ideCmd == ideExpand and conf.expandLevels == 0 and conf.expandProgress
+
 proc parseIdeCmd*(s: string): IdeCmd =
   case s:
   of "sug": ideSug
@@ -991,12 +1209,17 @@ proc parseIdeCmd*(s: string): IdeCmd =
   of "use": ideUse
   of "dus": ideDus
   of "chk": ideChk
+  of "chkFile": ideChkFile
   of "mod": ideMod
   of "highlight": ideHighlight
   of "outline": ideOutline
   of "known": ideKnown
   of "msg": ideMsg
   of "project": ideProject
+  of "globalSymbols": ideGlobalSymbols
+  of "recompile": ideRecompile
+  of "changed": ideChanged
+  of "type": ideType
   else: ideNone
 
 proc `$`*(c: IdeCmd): string =
@@ -1007,6 +1230,7 @@ proc `$`*(c: IdeCmd): string =
   of ideUse: "use"
   of ideDus: "dus"
   of ideChk: "chk"
+  of ideChkFile: "chkFile"
   of ideMod: "mod"
   of ideNone: "none"
   of ideHighlight: "highlight"
@@ -1014,6 +1238,13 @@ proc `$`*(c: IdeCmd): string =
   of ideKnown: "known"
   of ideMsg: "msg"
   of ideProject: "project"
+  of ideGlobalSymbols: "globalSymbols"
+  of ideDeclaration: "declaration"
+  of ideExpand: "expand"
+  of ideRecompile: "recompile"
+  of ideChanged: "changed"
+  of ideType: "type"
+  of ideInlayHints: "inlayHints"
 
 proc floatInt64Align*(conf: ConfigRef): int16 =
   ## Returns either 4 or 8 depending on reasons.

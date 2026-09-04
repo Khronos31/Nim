@@ -18,15 +18,22 @@ when not compileOption("threads") and not defined(nimdoc):
   when false: # fix #12330
     {.error: "Locks requires --threads:on option.".}
 
-const insideRLocksModule = false
-include "system/syslocks"
+import std/private/syslocks
 
 type
   Lock* = SysLock ## Nim lock; whether this is re-entrant
                   ## or not is unspecified!
   Cond* = SysCond ## Nim condition variable
 
-{.push stackTrace: off.}
+# `enforceNoRaises`: these are thin wrappers over the OS primitives and
+# cannot raise. Without the flag `canRaiseDisp` falls into its conservative
+# branch (they are not in the system module), so the codegen emits an
+# `if (*nimErr_) goto BeforeRet_` right after every `acquire` -- which sits
+# BETWEEN the acquire and the `try` that `withLock` generates, so the
+# `finally` cannot cover it. A caller entered with the error flag already
+# set then acquires the lock and jumps straight past the `release`,
+# leaking it. See lib/system/yrc.nim's drainStripe.
+{.push stackTrace: off, enforceNoRaises.}
 
 
 proc `$`*(lock: Lock): string =
@@ -38,7 +45,7 @@ proc initLock*(lock: var Lock) {.inline.} =
   when not defined(js):
     initSysLock(lock)
 
-proc deinitLock*(lock: var Lock) {.inline.} =
+proc deinitLock*(lock: Lock) {.inline.} =
   ## Frees the resources associated with the lock.
   deinitSys(lock)
 
@@ -61,7 +68,7 @@ proc initCond*(cond: var Cond) {.inline.} =
   ## Initializes the given condition variable.
   initSysCond(cond)
 
-proc deinitCond*(cond: var Cond) {.inline.} =
+proc deinitCond*(cond: Cond) {.inline.} =
   ## Frees the resources associated with the condition variable.
   deinitSysCond(cond)
 

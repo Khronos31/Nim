@@ -34,9 +34,9 @@
 ##
 ## Specify the test name as a command line argument.
 ##
-## .. code::
-##
+##   ```cmd
 ##   nim c -r test "my test name" "another test"
+##   ```
 ##
 ## Multiple arguments can be used.
 ##
@@ -45,9 +45,9 @@
 ##
 ## Specify the suite name delimited by `"::"`.
 ##
-## .. code::
-##
+##   ```cmd
 ##   nim c -r test "my test name::"
+##   ```
 ##
 ## Selecting tests by pattern
 ## ==========================
@@ -58,19 +58,18 @@
 ##
 ## Tests matching **any** of the arguments are executed.
 ##
-## .. code::
-##
+##   ```cmd
 ##   nim c -r test fast_suite::mytest1 fast_suite::mytest2
 ##   nim c -r test "fast_suite::mytest*"
 ##   nim c -r test "auth*::" "crypto::hashing*"
 ##   # Run suites starting with 'bug #' and standalone tests starting with '#'
 ##   nim c -r test 'bug #*::' '::#*'
+##   ```
 ##
 ## Examples
 ## ========
 ##
-## .. code:: nim
-##
+##   ```nim
 ##   suite "description for this stuff":
 ##     echo "suite setup: run once before the tests"
 ##
@@ -96,6 +95,7 @@
 ##         discard v[4]
 ##
 ##     echo "suite teardown: run once after the tests"
+##   ```
 ##
 ## Limitations/Bugs
 ## ================
@@ -108,15 +108,18 @@
 import std/private/since
 import std/exitprocs
 
-import macros, strutils, streams, times, sets, sequtils
+when defined(nimPreviewSlimSystem):
+  import std/[assertions, syncio]
+
+import std/[macros, strutils, streams, times, sets, sequtils]
 
 when declared(stdout):
-  import os
+  import std/os
 
 const useTerminal = not defined(js)
 
 when useTerminal:
-  import terminal
+  import std/terminal
 
 type
   TestStatus* = enum ## The status of a test when it is done.
@@ -232,7 +235,7 @@ proc colorOutput(): bool =
     else: result = false
   of "on": result = true
   of "off": result = false
-  else: doAssert false, $color
+  else: raiseAssert $color
 
   when declared(stdout):
     if existsEnv("NIMTEST_COLOR"):
@@ -430,8 +433,6 @@ proc matchFilter(suiteName, testName, filter: string): bool =
   return glob(suiteName, suiteAndTestFilters[0]) and
          glob(testName, suiteAndTestFilters[1])
 
-when defined(testing): export matchFilter
-
 proc shouldRun(currentSuiteName, testName: string): bool =
   ## Check if a test should be run by matching suiteName and testName against
   ## test filters.
@@ -472,27 +473,26 @@ template suite*(name, body) {.dirty.} =
   ## common fixture (``setup``, ``teardown``). The fixture is executed
   ## for EACH test.
   ##
-  ## .. code-block:: nim
-  ##  suite "test suite for addition":
-  ##    setup:
-  ##      let result = 4
+  ##   ```nim
+  ##   suite "test suite for addition":
+  ##     setup:
+  ##       let result = 4
   ##
-  ##    test "2 + 2 = 4":
-  ##      check(2+2 == result)
+  ##     test "2 + 2 = 4":
+  ##       check(2+2 == result)
   ##
-  ##    test "(2 + -2) != 4":
-  ##      check(2 + -2 != result)
+  ##     test "(2 + -2) != 4":
+  ##       check(2 + -2 != result)
   ##
-  ##    # No teardown needed
+  ##     # No teardown needed
+  ##   ```
   ##
   ## The suite will run the individual test cases in the order in which
   ## they were listed. With default global settings the above code prints:
   ##
-  ## .. code-block::
-  ##
-  ##  [Suite] test suite for addition
-  ##    [OK] 2 + 2 = 4
-  ##    [OK] (2 + -2) != 4
+  ##     [Suite] test suite for addition
+  ##       [OK] 2 + 2 = 4
+  ##       [OK] (2 + -2) != 4
   bind formatters, ensureInitialized, suiteEnded
 
   block:
@@ -518,20 +518,24 @@ proc exceptionTypeName(e: ref Exception): string {.inline.} =
   if e == nil: "<foreign exception>"
   else: $e.name
 
+when not declared(setProgramResult):
+  {.warning: "setProgramResult not available on platform, unittest will not" &
+    " give failing exit code on test failure".}
+  template setProgramResult(a: int) =
+    discard
+
 template test*(name, body) {.dirty.} =
   ## Define a single test case identified by `name`.
   ##
-  ## .. code-block:: nim
-  ##
-  ##  test "roses are red":
-  ##    let roses = "red"
-  ##    check(roses == "red")
+  ##   ```nim
+  ##   test "roses are red":
+  ##     let roses = "red"
+  ##     check(roses == "red")
+  ##   ```
   ##
   ## The above code outputs:
   ##
-  ## .. code-block::
-  ##
-  ##  [OK] roses are red
+  ##     [OK] roses are red
   bind shouldRun, checkpoints, formatters, ensureInitialized, testEnded, exceptionTypeName, setProgramResult
 
   ensureInitialized()
@@ -549,15 +553,16 @@ template test*(name, body) {.dirty.} =
         defer: testTeardownIMPL()
       body
 
-    except:
+    except Exception:
       let e = getCurrentException()
       let eTypeDesc = "[" & exceptionTypeName(e) & "]"
       checkpoint("Unhandled exception: " & getCurrentExceptionMsg() & " " & eTypeDesc)
-      if e == nil: # foreign
-        fail()
-      else:
-        var stackTrace {.inject.} = e.getStackTrace()
-        fail()
+      var stackTrace {.inject.} = e.getStackTrace()
+      fail()
+
+    except:
+      checkpoint("Unhandled exception: " & getCurrentExceptionMsg() & " [<foreign exception>]")
+      fail()
 
     finally:
       if testStatusIMPL == TestStatus.FAILED:
@@ -574,11 +579,11 @@ proc checkpoint*(msg: string) =
   ## Set a checkpoint identified by `msg`. Upon test failure all
   ## checkpoints encountered so far are printed out. Example:
   ##
-  ## .. code-block:: nim
-  ##
-  ##  checkpoint("Checkpoint A")
-  ##  check((42, "the Answer to life and everything") == (1, "a"))
-  ##  checkpoint("Checkpoint B")
+  ##   ```nim
+  ##   checkpoint("Checkpoint A")
+  ##   check((42, "the Answer to life and everything") == (1, "a"))
+  ##   checkpoint("Checkpoint B")
+  ##   ```
   ##
   ## outputs "Checkpoint A" once it fails.
   checkpoints.add(msg)
@@ -590,11 +595,11 @@ template fail* =
   ## failed (change exit code and test status). This template is useful
   ## for debugging, but is otherwise mostly used internally. Example:
   ##
-  ## .. code-block:: nim
-  ##
-  ##  checkpoint("Checkpoint A")
-  ##  complicatedProcInThread()
-  ##  fail()
+  ##   ```nim
+  ##   checkpoint("Checkpoint A")
+  ##   complicatedProcInThread()
+  ##   fail()
+  ##   ```
   ##
   ## outputs "Checkpoint A" before quitting.
   bind ensureInitialized, setProgramResult
@@ -622,11 +627,10 @@ template skip* =
   ## for reasons depending on outer environment,
   ## or certain application logic conditions or configurations.
   ## The test code is still executed.
-  ##
-  ## .. code-block:: nim
-  ##
-  ##  if not isGLContextCreated():
-  ##    skip()
+  ##   ```nim
+  ##   if not isGLContextCreated():
+  ##     skip()
+  ##   ```
   bind checkpoints
 
   testStatusIMPL = TestStatus.SKIPPED
@@ -649,18 +653,12 @@ macro check*(conditions: untyped): untyped =
 
   let checked = callsite()[1]
 
-  template asgn(a: untyped, value: typed) =
-    var a = value # XXX: we need "var: var" here in order to
-                  # preserve the semantics of var params
-
   template print(name: untyped, value: typed) =
     when compiles(string($value)):
       checkpoint(name & " was " & $value)
 
   proc inspectArgs(exp: NimNode): tuple[assigns, check, printOuts: NimNode] =
-    result.check = copyNimTree(exp)
-    result.assigns = newNimNode(nnkStmtList)
-    result.printOuts = newNimNode(nnkStmtList)
+    result = (newNimNode(nnkStmtList), copyNimTree(exp), newNimNode(nnkStmtList))
 
     var counter = 0
 
@@ -678,8 +676,16 @@ macro check*(conditions: untyped): untyped =
           if exp[i].kind in nnkCallKinds + {nnkDotExpr, nnkBracketExpr, nnkPar} and
                   (exp[i].typeKind notin {ntyTypeDesc} or $exp[0] notin ["is", "isnot"]):
             let callVar = newIdentNode(":c" & $counter)
-            result.assigns.add getAst(asgn(callVar, paramAst))
+            # Construct AST directly instead of using getAst to preserve line info
+            let asgnNode = newNimNode(nnkVarSection, exp[i])
+            let identDef = newNimNode(nnkIdentDefs, exp[i])
+            identDef.add callVar
+            identDef.add newEmptyNode()
+            identDef.add paramAst
+            asgnNode.add identDef
+            result.assigns.add asgnNode
             result.check[i] = callVar
+            result.check[^1].setLineInfo exp.lineInfoObj
             result.printOuts.add getAst(print(argStr, callVar))
           if exp[i].kind == nnkExprEqExpr:
             # ExprEqExpr
@@ -688,8 +694,16 @@ macro check*(conditions: untyped): untyped =
             result.check[i] = exp[i][1]
           if exp[i].typeKind notin {ntyTypeDesc}:
             let arg = newIdentNode(":p" & $counter)
-            result.assigns.add getAst(asgn(arg, paramAst))
+            # Construct AST directly instead of using getAst to preserve line info
+            let asgnNode = newNimNode(nnkVarSection, exp[i])
+            let identDef = newNimNode(nnkIdentDefs, exp[i])
+            identDef.add arg
+            identDef.add newEmptyNode()
+            identDef.add paramAst
+            asgnNode.add identDef
+            result.assigns.add asgnNode
             result.printOuts.add getAst(print(argStr, arg))
+            result.printOuts[^1].setLineInfo exp.lineInfoObj
             if exp[i].kind != nnkExprEqExpr:
               result.check[i] = arg
             else:
@@ -701,10 +715,31 @@ macro check*(conditions: untyped): untyped =
     let (assigns, check, printOuts) = inspectArgs(checked)
     let lineinfo = newStrLitNode(checked.lineInfo)
     let callLit = checked.toStrLit
+
+    # Wrap assigns in a line pragma block to preserve stack trace location
+    let pragmaBlock = newNimNode(nnkPragmaBlock)
+    let pragma = newNimNode(nnkPragma)
+    let exprColonExpr = newNimNode(nnkExprColonExpr)
+    exprColonExpr.add newIdentNode("line")
+
+    # Create a tuple literal with (filename, line, column) from checked
+    let lineInfoObj = checked.lineInfoObj
+    let tupleLit = newNimNode(nnkTupleConstr)
+    tupleLit.add newLit(lineInfoObj.filename)
+    tupleLit.add newLit(lineInfoObj.line.int)
+    tupleLit.add newLit(lineInfoObj.column.int)
+    exprColonExpr.add tupleLit
+
+    pragma.add exprColonExpr
+    pragmaBlock.add pragma
+    pragmaBlock.add assigns
+
     result = quote do:
       block:
-        `assigns`
-        if not `check`:
+        `pragmaBlock`
+        if `check`:
+          discard
+        else:
           checkpoint(`lineinfo` & ": Check failed: " & `callLit`)
           `printOuts`
           fail()
@@ -720,7 +755,9 @@ macro check*(conditions: untyped): untyped =
     let callLit = checked.toStrLit
 
     result = quote do:
-      if not `checked`:
+      if `checked`:
+        discard
+      else:
         checkpoint(`lineinfo` & ": Check failed: " & `callLit`)
         fail()
 
@@ -751,6 +788,14 @@ macro expect*(exceptions: varargs[typed], body: untyped): untyped =
     expect IOError, OSError, ValueError, AssertionDefect:
       defectiveRobot()
 
+  template expectException(errorTypes, lineInfoLit, body): NimNode {.dirty.} =
+    try:
+      body
+      checkpoint(lineInfoLit & ": Expect Failed, no exception was thrown.")
+      fail()
+    except errorTypes:
+      discard
+
   template expectBody(errorTypes, lineInfoLit, body): NimNode {.dirty.} =
     try:
       body
@@ -758,15 +803,21 @@ macro expect*(exceptions: varargs[typed], body: untyped): untyped =
       fail()
     except errorTypes:
       discard
-    except:
-      checkpoint(lineInfoLit & ": Expect Failed, unexpected exception was thrown.")
+    except Exception:
+      let err = getCurrentException()
+      checkpoint(lineInfoLit & ": Expect Failed, " & $err.name & " was thrown.")
       fail()
-
   var errorTypes = newNimNode(nnkBracket)
+  var hasException = false
   for exp in exceptions:
+    if exp.strVal == "Exception":
+      hasException = true
     errorTypes.add(exp)
 
-  result = getAst(expectBody(errorTypes, errorTypes.lineInfo, body))
+  if hasException:
+    result = getAst(expectException(errorTypes, errorTypes.lineInfo, body))
+  else:
+    result = getAst(expectBody(errorTypes, errorTypes.lineInfo, body))
 
 proc disableParamFiltering* =
   ## disables filtering tests with the command line params

@@ -1,9 +1,9 @@
 discard """
   targets: "c cpp js"
-  matrix: "--gc:refc; --gc:arc"
+  matrix: "--mm:refc; --mm:orc"
 """
 
-import std/[strbasics, sugar]
+import std/[strbasics, sugar, assertions]
 
 template strip2(input: string, args: varargs[untyped]): untyped =
   var a = input
@@ -73,7 +73,7 @@ proc main() =
 
   block: # setSlice
     var a = "Hello, Nim!"
-    doassert a.dup(setSlice(7 .. 9)) == "Nim"
+    doAssert a.dup(setSlice(7 .. 9)) == "Nim"
     doAssert a.dup(setSlice(0 .. 0)) == "H"
     doAssert a.dup(setSlice(0 .. 1)) == "He"
     doAssert a.dup(setSlice(0 .. 10)) == a
@@ -90,11 +90,13 @@ proc main() =
     var a0 = "hi"
     var b0 = "foobar"
     when nimvm:
-      discard # pending bug #15952
+      a0.add b0.toOpenArray(1,3)
+      doAssert a0 == "hioob"
     else:
       a0.add b0.toOpenArray(1,3)
       doAssert a0 == "hioob"
     proc fn(c: openArray[char]): string =
+      result = ""
       result.add c
     doAssert fn("def") == "def"
     doAssert fn(['d','\0', 'f'])[2] == 'f'

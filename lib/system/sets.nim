@@ -9,18 +9,27 @@
 
 # set handling
 
-type
-  NimSet = array[0..4*2048-1, uint8]
 
+# IC: compilerprocs now must be defined in system.nim or threadpool.nim!
+proc countBits32*(n: uint32): int {.compilerproc, inline.} =
+  result = countSetBitsImpl(n)
 
-proc cardSet(s: NimSet, len: int): int {.compilerproc, inline.} =
+proc countBits64*(n: uint64): int {.compilerproc, inline.} =
+  result = countSetBitsImpl(n)
+
+proc cardSetImpl(s: ptr UncheckedArray[uint8], len: int): int {.inline.} =
   var i = 0
   result = 0
+  var num = 0'u64
   when defined(x86) or defined(amd64):
     while i < len - 8:
-      inc(result, countBits64((cast[ptr uint64](s[i].unsafeAddr))[]))
+      copyMem(addr num, addr s[i], 8)
+      inc(result, countBits64(num))
       inc(i, 8)
 
   while i < len:
     inc(result, countBits32(uint32(s[i])))
     inc(i, 1)
+
+proc cardSet(s: ptr UncheckedArray[uint8], len: int): int {.compilerproc, inline.} =
+  result = cardSetImpl(s, len)

@@ -11,21 +11,36 @@
 ##
 ## Experimental API, subject to change.
 
+when defined(nimPreviewSlimSystem):
+  import std/assertions
+
+
 const whitespaces = {' ', '\t', '\v', '\r', '\l', '\f'}
 
+const notJSnotNims = not defined(js) and not defined(nimscript)
+template whenNotVmJsNims(normalBody, restrictedBody: untyped) =
+  ## hack, see: #12517 #12518; Edit together with identical in `system`
+  when nimvm:
+    restrictedBody
+  else:
+    when notJSnotNims:
+      normalBody
+    else:
+      restrictedBody
+
 proc add*(x: var string, y: openArray[char]) =
-  ## Concatenates `x` and `y` in place. `y` must not overlap with `x` to
-  ## allow future `memcpy` optimizations.
+  ## Concatenates `x` and `y` in place. `y` must not overlap with `x`
   # Use `{.noalias.}` ?
-  let n = x.len
-  x.setLen n + y.len
-    # pending https://github.com/nim-lang/Nim/issues/14655#issuecomment-643671397
-    # use x.setLen(n + y.len, isInit = false)
-  var i = 0
-  while i < y.len:
-    x[n + i] = y[i]
-    i.inc
-  # xxx use `nimCopyMem(x[n].addr, y[0].addr, y.len)` after some refactoring
+  if y.len == 0: return
+  let oldLen = x.len
+  x.setLenUninit(oldLen + y.len)
+  whenNotVmJsNims():
+    {.cast(noSideEffect).}:
+      copyMem(beginStore(x, oldLen + y.len, oldLen), addr(y[0]), y.len)
+      endStore(x)
+  do:
+    for i, ch in y:
+      x[oldLen + i] = ch
 
 func stripSlice(s: openArray[char], leading = true, trailing = true, chars: set[char] = whitespaces): Slice[int] =
   ## Returns the slice range of `s` which is stripped `chars`.
@@ -46,7 +61,7 @@ func setSlice*(s: var string, slice: Slice[int]) =
     import std/sugar
 
     var a = "Hello, Nim!"
-    doassert a.dup(setSlice(7 .. 9)) == "Nim"
+    doAssert a.dup(setSlice(7 .. 9)) == "Nim"
     doAssert a.dup(setSlice(0 .. 0)) == "H"
     doAssert a.dup(setSlice(0 .. 1)) == "He"
     doAssert a.dup(setSlice(0 .. 10)) == a
@@ -70,19 +85,14 @@ func setSlice*(s: var string, slice: Slice[int]) =
   if first > last:
     s.setLen(0)
     return
-  template impl =
-    for index in first .. last:
-      s[index - first] = s[index]
   if first > 0:
-    when nimvm: impl()
-    else:
-      # not JS and not Nimscript
-      when not declared(moveMem):
-        impl()
-      else:
-        when defined(nimSeqsV2):
-          prepareMutation(s)
-        moveMem(addr s[0], addr s[first], last - first + 1)
+    whenNotVmJsNims():
+      let p = beginStore(s, s.len)
+      moveMem(p, addr p[first], last - first + 1)
+      endStore(s)
+    do:
+      for index in first .. last:
+        s[index - first] = s[index]
   s.setLen(last - first + 1)
 
 func strip*(a: var string, leading = true, trailing = true, chars: set[char] = whitespaces) {.inline.} =

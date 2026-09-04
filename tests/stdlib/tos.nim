@@ -22,12 +22,16 @@ __really_obscure_dir_name/test
 Raises
 Raises
 '''
+  matrix: "--mm:refc; --mm:orc"
   joinable: false
 """
 # test os path creation, iteration, and deletion
 
-import os, strutils, pathnorm
 from stdtest/specialpaths import buildDir
+import std/[syncio, assertions, osproc, os, strutils, pathnorm]
+
+import std/paths except getCurrentDir
+import std/[files, dirs]
 
 block fileOperations:
   let files = @["these.txt", "are.x", "testing.r", "files.q"]
@@ -51,11 +55,11 @@ block fileOperations:
     doAssertRaises(OSError): copyFile(file, dname/sub/fname2)
     doAssertRaises(OSError): copyFileToDir(file, dname/sub)
     doAssertRaises(ValueError): copyFileToDir(file, "")
-    copyFile(file, file2)
+    copyFile(Path file, Path file2)
     doAssert fileExists(file2)
     doAssert readFile(file2) == str
     createDir(dname/sub)
-    copyFileToDir(file, dname/sub)
+    copyFileToDir(Path file, Path dname/sub)
     doAssert fileExists(dname/sub/fname)
     removeDir(dname/sub)
     doAssert not dirExists(dname/sub)
@@ -130,12 +134,13 @@ block fileOperations:
   removeDir(dname)
 
   # test copyDir:
-  createDir("a/b")
+  createDir(Path "a/b")
   open("a/b/file.txt", fmWrite).close
   createDir("a/b/c")
   open("a/b/c/fileC.txt", fmWrite).close
 
-  copyDir("a", "../dest/a")
+  createDir(Path"a/b")
+  copyDir(Path "a",  Path "../dest/a")
   removeDir("a")
 
   doAssert dirExists("../dest/a/b")
@@ -156,10 +161,25 @@ block fileOperations:
   doAssert fileExists("../dest/a/file.txt")
   removeDir("../dest")
 
+  # createDir should not fail if `dir` is empty
+  createDir("")
+
+
+  when defined(linux): # bug #24174
+    createDir("a/b")
+    open("a/file.txt", fmWrite).close
+
+    if not fileExists("a/fifoFile"):
+      doAssert execCmd("mkfifo -m 600 a/fifoFile") == 0
+
+    copyDir("a/", "../dest/a/", skipSpecial = true)
+    copyDirWithPermissions(Path "a/", Path "../dest2/a/", skipSpecial = true)
+    removeDir("a")
+
   # Symlink handling in `copyFile`, `copyFileWithPermissions`, `copyFileToDir`,
   # `copyDir`, `copyDirWithPermissions`, `moveFile`, and `moveDir`.
   block:
-    const symlinksAreHandled = not defined(windows)
+    const symlinkCopiesAreHandled = not defined(windows)
     const dname = buildDir/"D20210116T140629"
     const subDir = dname/"sub"
     const subDir2 = dname/"sub2"
@@ -169,98 +189,131 @@ block fileOperations:
     const brokenSymlinkCopy = brokenSymlink & "_COPY"
     const brokenSymlinkInSubDir = subDir/brokenSymlinkName
     const brokenSymlinkInSubDir2 = subDir2/brokenSymlinkName
+    const symlinkProbeTarget = dname/"symlink_probe_target"
+    const symlinkProbeLink = dname/"symlink_probe_link"
 
-    createDir(subDir)
-    createSymlink(brokenSymlinkSrc, brokenSymlink)
+    proc removePathIfExists(path: string) =
+      if fileExists(path):
+        removeFile(path)
+      elif dirExists(path):
+        removeDir(path)
 
-    # Test copyFile
-    when symlinksAreHandled:
+    proc canCreateSymlinks(): bool =
+      # We need this check for Windows if we want to permit the block to run
+      # when we have admin privileges
+      try:
+        removePathIfExists(dname)
+        createDir(dname)
+        writeFile(symlinkProbeTarget, "")
+        createSymlink(symlinkProbeTarget, symlinkProbeLink)
+        result = true
+      except OSError:
+        result = false
+      finally:
+        removePathIfExists(symlinkProbeLink)
+        removePathIfExists(symlinkProbeTarget)
+        removePathIfExists(dname)
+
+    proc doAssertExpandedSymlink(path, expected: string) =
+      let actual = expandSymlink(path)
+      doAssert actual == expected,
+        "expandSymlink(" & path & ") returned " & actual &
+        " instead of " & expected
+
+    removePathIfExists(dname)
+    let symlinksAreAvailable = not defined(windows) or canCreateSymlinks()
+    if symlinksAreAvailable:
+      defer:
+        removePathIfExists(dname)
+
+      createDir(subDir)
+      createSymlink(brokenSymlinkSrc, brokenSymlink)
+      doAssertExpandedSymlink(brokenSymlink, brokenSymlinkSrc)
       doAssertRaises(OSError):
-        copyFile(brokenSymlink, brokenSymlinkCopy)
-      doAssertRaises(OSError):
-        copyFile(brokenSymlink, brokenSymlinkCopy, {cfSymlinkFollow})
-    copyFile(brokenSymlink, brokenSymlinkCopy, {cfSymlinkIgnore})
-    doAssert not fileExists(brokenSymlinkCopy)
-    copyFile(brokenSymlink, brokenSymlinkCopy, {cfSymlinkAsIs})
-    when symlinksAreHandled:
-      doAssert expandSymlink(brokenSymlinkCopy) == brokenSymlinkSrc
-      removeFile(brokenSymlinkCopy)
-    else:
+        discard expandSymlink(dname)
+
+      # Test copyFile
+      when symlinkCopiesAreHandled:
+        doAssertRaises(OSError):
+          copyFile(brokenSymlink, brokenSymlinkCopy)
+        doAssertRaises(OSError):
+          copyFile(brokenSymlink, brokenSymlinkCopy, {cfSymlinkFollow})
+      copyFile(brokenSymlink, brokenSymlinkCopy, {cfSymlinkIgnore})
       doAssert not fileExists(brokenSymlinkCopy)
-    doAssertRaises(AssertionDefect):
-      copyFile(brokenSymlink, brokenSymlinkCopy,
-               {cfSymlinkAsIs, cfSymlinkFollow})
+      copyFile(brokenSymlink, brokenSymlinkCopy, {cfSymlinkAsIs})
+      when symlinkCopiesAreHandled:
+        doAssertExpandedSymlink(brokenSymlinkCopy, brokenSymlinkSrc)
+        removeFile(brokenSymlinkCopy)
+      else:
+        doAssert not fileExists(brokenSymlinkCopy)
+      doAssertRaises(AssertionDefect):
+        copyFile(brokenSymlink, brokenSymlinkCopy,
+                {cfSymlinkAsIs, cfSymlinkFollow})
 
-    # Test copyFileWithPermissions
-    when symlinksAreHandled:
-      doAssertRaises(OSError):
-        copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy)
-      doAssertRaises(OSError):
-        copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
-                                options = {cfSymlinkFollow})
-    copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
-                            options = {cfSymlinkIgnore})
-    doAssert not fileExists(brokenSymlinkCopy)
-    copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
-                            options = {cfSymlinkAsIs})
-    when symlinksAreHandled:
-      doAssert expandSymlink(brokenSymlinkCopy) == brokenSymlinkSrc
-      removeFile(brokenSymlinkCopy)
-    else:
-      doAssert not fileExists(brokenSymlinkCopy)
-    doAssertRaises(AssertionDefect):
+      # Test copyFileWithPermissions
+      when symlinkCopiesAreHandled:
+        doAssertRaises(OSError):
+          copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy)
+        doAssertRaises(OSError):
+          copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
+                                  options = {cfSymlinkFollow})
       copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
-                              options = {cfSymlinkAsIs, cfSymlinkFollow})
+                              options = {cfSymlinkIgnore})
+      doAssert not fileExists(brokenSymlinkCopy)
+      copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
+                              options = {cfSymlinkAsIs})
+      when symlinkCopiesAreHandled:
+        doAssertExpandedSymlink(brokenSymlinkCopy, brokenSymlinkSrc)
+        removeFile(brokenSymlinkCopy)
+      else:
+        doAssert not fileExists(brokenSymlinkCopy)
+      doAssertRaises(AssertionDefect):
+        copyFileWithPermissions(brokenSymlink, brokenSymlinkCopy,
+                                options = {cfSymlinkAsIs, cfSymlinkFollow})
 
-    # Test copyFileToDir
-    when symlinksAreHandled:
-      doAssertRaises(OSError):
-        copyFileToDir(brokenSymlink, subDir)
-      doAssertRaises(OSError):
-        copyFileToDir(brokenSymlink, subDir, {cfSymlinkFollow})
-    copyFileToDir(brokenSymlink, subDir, {cfSymlinkIgnore})
-    doAssert not fileExists(brokenSymlinkInSubDir)
-    copyFileToDir(brokenSymlink, subDir, {cfSymlinkAsIs})
-    when symlinksAreHandled:
-      doAssert expandSymlink(brokenSymlinkInSubDir) == brokenSymlinkSrc
-      removeFile(brokenSymlinkInSubDir)
-    else:
+      # Test copyFileToDir
+      when symlinkCopiesAreHandled:
+        doAssertRaises(OSError):
+          copyFileToDir(brokenSymlink, subDir)
+        doAssertRaises(OSError):
+          copyFileToDir(brokenSymlink, subDir, {cfSymlinkFollow})
+      copyFileToDir(brokenSymlink, subDir, {cfSymlinkIgnore})
       doAssert not fileExists(brokenSymlinkInSubDir)
+      copyFileToDir(brokenSymlink, subDir, {cfSymlinkAsIs})
+      when symlinkCopiesAreHandled:
+        doAssertExpandedSymlink(brokenSymlinkInSubDir, brokenSymlinkSrc)
+        removeFile(brokenSymlinkInSubDir)
+      else:
+        doAssert not fileExists(brokenSymlinkInSubDir)
 
-    createSymlink(brokenSymlinkSrc, brokenSymlinkInSubDir)
+      createSymlink(brokenSymlinkSrc, brokenSymlinkInSubDir)
 
-    # Test copyDir
-    copyDir(subDir, subDir2)
-    when symlinksAreHandled:
-      doAssert expandSymlink(brokenSymlinkInSubDir2) == brokenSymlinkSrc
+      # Test copyDir
+      copyDir(subDir, subDir2)
+      when symlinkCopiesAreHandled:
+        doAssertExpandedSymlink(brokenSymlinkInSubDir2, brokenSymlinkSrc)
+      else:
+        doAssert not fileExists(brokenSymlinkInSubDir2)
+      removeDir(subDir2)
+
+      # Test copyDirWithPermissions
+      copyDirWithPermissions(subDir, subDir2)
+      when symlinkCopiesAreHandled:
+        doAssertExpandedSymlink(brokenSymlinkInSubDir2, brokenSymlinkSrc)
+      else:
+        doAssert not fileExists(brokenSymlinkInSubDir2)
+      removeDir(subDir2)
+
+      # Test moveFile
+      moveFile(brokenSymlink, brokenSymlinkCopy)
+      doAssertExpandedSymlink(brokenSymlinkCopy, brokenSymlinkSrc)
+      removeFile(brokenSymlinkCopy)
+
+      # Test moveDir
+      moveDir(subDir, subDir2)
+      doAssertExpandedSymlink(brokenSymlinkInSubDir2, brokenSymlinkSrc)
     else:
-      doAssert not fileExists(brokenSymlinkInSubDir2)
-    removeDir(subDir2)
-
-    # Test copyDirWithPermissions
-    copyDirWithPermissions(subDir, subDir2)
-    when symlinksAreHandled:
-      doAssert expandSymlink(brokenSymlinkInSubDir2) == brokenSymlinkSrc
-    else:
-      doAssert not fileExists(brokenSymlinkInSubDir2)
-    removeDir(subDir2)
-
-    # Test moveFile
-    moveFile(brokenSymlink, brokenSymlinkCopy)
-    when not defined(windows):
-      doAssert expandSymlink(brokenSymlinkCopy) == brokenSymlinkSrc
-    else:
-      doAssert symlinkExists(brokenSymlinkCopy)
-    removeFile(brokenSymlinkCopy)
-
-    # Test moveDir
-    moveDir(subDir, subDir2)
-    when not defined(windows):
-      doAssert expandSymlink(brokenSymlinkInSubDir2) == brokenSymlinkSrc
-    else:
-      doAssert symlinkExists(brokenSymlinkInSubDir2)
-
-    removeDir(dname)
+      discard "Skipping symlink tests: symlink creation is not permitted in this environment"
 
 block: # moveFile
   let tempDir = getTempDir() / "D20210609T151608"
@@ -340,6 +393,8 @@ block walkDirRec:
 
   removeDir("walkdir_test")
 
+import std/sequtils
+
 block: # walkDir
   doAssertRaises(OSError):
     for a in walkDir("nonexistent", checkDir = true): discard
@@ -352,6 +407,21 @@ block: # walkDir
       createSymlink(".", "walkdir_test/c")
       for k, p in walkDir("walkdir_test", true):
         doAssert k == pcLinkToDir
+      removeDir("walkdir_test")
+
+  when defined(posix):
+    block walkDirSpecial:
+      createDir("walkdir_test")
+      doAssert execShellCmd("mkfifo walkdir_test/fifo") == 0
+      createSymlink("fifo", "walkdir_test/fifo_link")
+      let withSpecialFiles = toSeq(walkDir("walkdir_test", relative = true))
+      doAssert (withSpecialFiles.len == 2 and
+                (pcFile, "fifo") in withSpecialFiles and
+                (pcLinkToFile, "fifo_link") in withSpecialFiles)
+      # now Unix special files are excluded from walkdir output:
+      let skipSpecialFiles = toSeq(walkDir("walkdir_test", relative = true,
+                                           skipSpecial = true))
+      doAssert skipSpecialFiles.len == 0
       removeDir("walkdir_test")
 
 block normalizedPath:
@@ -508,7 +578,11 @@ block ospaths:
   doAssert relativePath("/Users/me/bar/z.nim", "/Users/other/bad", '/') == "../../me/bar/z.nim"
 
   doAssert relativePath("/Users/me/bar/z.nim", "/Users/other", '/') == "../me/bar/z.nim"
-  doAssert relativePath("/Users///me/bar//z.nim", "//Users/", '/') == "me/bar/z.nim"
+
+  # `//` is a UNC path, `/` is the current working directory's drive, so can't
+  # run this test on Windows.
+  when not doslikeFileSystem:
+    doAssert relativePath("/Users///me/bar//z.nim", "//Users/", '/') == "me/bar/z.nim"
   doAssert relativePath("/Users/me/bar/z.nim", "/Users/me", '/') == "bar/z.nim"
   doAssert relativePath("", "/users/moo", '/') == ""
   doAssert relativePath("foo", "", '/') == "foo"
@@ -664,7 +738,121 @@ block: # normalizePathEnd
     doAssert r"E:/".normalizePathEnd(trailingSep = true) == r"E:\"
     doAssert "/".normalizePathEnd == r"\"
 
-block: # isValidFilename
+
+import sugar
+
+block: # normalizeExe
+  doAssert "".dup(normalizeExe) == ""
+  when defined(posix):
+    doAssert "foo".dup(normalizeExe) == "./foo"
+    doAssert "foo/../bar".dup(normalizeExe) == "foo/../bar"
+  when defined(windows):
+    doAssert "foo".dup(normalizeExe) == "foo"
+
+block: # isAdmin
+  let isAzure = existsEnv("TF_BUILD") # xxx factor with testament.specs.isAzure
+  # In Azure on Windows tests run as an admin user
+  if isAzure and defined(windows): doAssert isAdmin()
+  # In Azure on POSIX tests run as a normal user
+  if isAzure and defined(posix): doAssert not isAdmin()
+
+
+import sugar
+
+block: # normalizeExe
+  doAssert "".dup(normalizeExe) == ""
+  when defined(posix):
+    doAssert "foo".dup(normalizeExe) == "./foo"
+    doAssert "foo/../bar".dup(normalizeExe) == "foo/../bar"
+  when defined(windows):
+    doAssert "foo".dup(normalizeExe) == "foo"
+
+block: # isAdmin
+  let isAzure = existsEnv("TF_BUILD") # xxx factor with testament.specs.isAzure
+  # In Azure on Windows tests run as an admin user
+  if isAzure and defined(windows): doAssert isAdmin()
+  # In Azure on POSIX tests run as a normal user
+  if isAzure and defined(posix): doAssert not isAdmin()
+
+when doslikeFileSystem:
+  import std/private/ntpath
+
+  block: # Bug #19103 UNC paths
+
+    # Easiest way of generating a valid, readable and writable UNC path
+    let tempDir = r"\\?\" & getTempDir()
+    doAssert dirExists tempDir
+    createDir tempDir / "test"
+    removeDir tempDir / "test"
+    createDir tempDir / "recursive" / "test"
+    removeDir tempDir / "recursive" / "test"
+
+    let tempDir2 = getTempDir()
+    let (drive, pathNoDrive) = splitDrive(tempDir2)
+    setCurrentDir drive
+    doAssert cmpIgnoreCase(getCurrentDir().splitDrive.drive, drive) == 0
+
+    # Test `\Users` path syntax on Windows by stripping away drive. `\`
+    # resolves to the drive in current working directory. This drive will be
+    # the same as `tempDir2` because of the `setCurrentDir` above.
+    doAssert pathNoDrive[0] == '\\'
+    createDir pathNoDrive / "test"
+    doAssert dirExists pathNoDrive / "test"
+    removeDir pathNoDrive / "test"
+
+    doAssert splitPath("//?/c:") == ("//?/c:", "")
+
+    doAssert relativePath("//?/c:///Users//me", "//?/c:", '/') == "Users/me"
+
+    doAssert parentDir(r"\\?\c:") == r""
+    doAssert parentDir(r"//?/c:/Users") == r"\\?\c:"
+    doAssert parentDir(r"\\localhost\c$") == r""
+    doAssert parentDir(r"\Users") == r"\"
+
+    doAssert tailDir("//?/c:") == ""
+    doAssert tailDir("//?/c:/Users") == "Users"
+    doAssert tailDir(r"\\localhost\c$\Windows\System32") == r"Windows\System32"
+
+    doAssert isRootDir("//?/c:")
+    doAssert isRootDir("//?/UNC/localhost/c$")
+    doAssert not isRootDir(r"\\?\c:\Users")
+
+    doAssert parentDirs(r"C:\Users", fromRoot = true).toSeq == @[r"C:\", r"C:\Users"]
+    doAssert parentDirs(r"C:\Users", fromRoot = false).toSeq == @[r"C:\Users", r"C:"]
+    doAssert parentDirs(r"\\?\c:\Users", fromRoot = true).toSeq ==
+      @[r"\\?\c:\", r"\\?\c:\Users"]
+    doAssert parentDirs(r"\\?\c:\Users", fromRoot = false).toSeq ==
+      @[r"\\?\c:\Users", r"\\?\c:"]
+    doAssert parentDirs(r"//localhost/c$/Users", fromRoot = true).toSeq ==
+      @[r"//localhost/c$/", r"//localhost/c$/Users"]
+    doAssert parentDirs(r"//?/UNC/localhost/c$/Users", fromRoot = false).toSeq ==
+      @[r"//?/UNC/localhost/c$/Users", r"\\?\UNC\localhost\c$"]
+    doAssert parentDirs(r"\Users", fromRoot = true).toSeq == @[r"\", r"\Users"]
+    doAssert parentDirs(r"\Users", fromRoot = false).toSeq == @[r"\Users", r"\"]
+
+    doAssert r"//?/c:" /../ "d/e" == r"\\?\c:\d\e"
+    doAssert r"//?/c:/Users" /../ "d/e" == r"\\?\c:\d\e"
+    doAssert r"\\localhost\c$" /../ "d/e" == r"\\localhost\c$\d\e"
+
+    doAssert splitFile("//?/c:") == ("//?/c:", "", "")
+    doAssert splitFile("//?/c:/Users") == ("//?/c:", "Users", "")
+    doAssert splitFile(r"\\localhost\c$\test.txt") == (r"\\localhost\c$", "test", ".txt")
+
+else:
+  block: # parentDirs
+    doAssert parentDirs("/home", fromRoot=true).toSeq == @["/", "/home"]
+    doAssert parentDirs("/home", fromRoot=false).toSeq == @["/home", "/"]
+    doAssert parentDirs("home", fromRoot=true).toSeq == @["home"]
+    doAssert parentDirs("home", fromRoot=false).toSeq == @["home"]
+
+    doAssert parentDirs("/home/user", fromRoot=true).toSeq == @["/", "/home/", "/home/user"]
+    doAssert parentDirs("/home/user", fromRoot=false).toSeq == @["/home/user", "/home", "/"]
+    doAssert parentDirs("home/user", fromRoot=true).toSeq == @["home/", "home/user"]
+    doAssert parentDirs("home/user", fromRoot=false).toSeq == @["home/user", "home"]
+
+
+# https://github.com/nim-lang/Nim/pull/19643#issuecomment-1235102314
+block:  # isValidFilename
   # Negative Tests.
   doAssert not isValidFilename("abcd", maxLen = 2)
   doAssert not isValidFilename("0123456789", maxLen = 8)
@@ -691,19 +879,34 @@ block: # isValidFilename
   doAssert isValidFilename("nim.nim")
   doAssert isValidFilename("foo.log")
 
-import sugar
+block: # searchExtPos
+  doAssert "foo.nim".searchExtPos == 3
+  doAssert "/foo.nim".searchExtPos == 4
+  doAssert "".searchExtPos == -1
+  doAssert "/".searchExtPos == -1
+  doAssert "a.b/foo".searchExtPos == -1
+  doAssert ".".searchExtPos == -1
+  doAssert "foo.".searchExtPos == 3
+  doAssert "foo..".searchExtPos == 4
+  doAssert "..".searchExtPos == -1
+  doAssert "...".searchExtPos == -1
+  doAssert "./".searchExtPos == -1
+  doAssert "../".searchExtPos == -1
+  doAssert "/.".searchExtPos == -1
+  doAssert "/..".searchExtPos == -1
+  doAssert ".b".searchExtPos == -1
+  doAssert "..b".searchExtPos == -1
+  doAssert "/.b".searchExtPos == -1
+  doAssert "a/.b".searchExtPos == -1
+  doAssert ".a.b".searchExtPos == 2
+  doAssert "a/.b.c".searchExtPos == 4
+  doAssert "a/..b".searchExtPos == -1
+  doAssert "a/b..c".searchExtPos == 4
 
-block: # normalizeExe
-  doAssert "".dup(normalizeExe) == ""
-  when defined(posix):
-    doAssert "foo".dup(normalizeExe) == "./foo"
-    doAssert "foo/../bar".dup(normalizeExe) == "foo/../bar"
-  when defined(windows):
-    doAssert "foo".dup(normalizeExe) == "foo"
-
-block: # isAdmin
-  let isAzure = existsEnv("TF_BUILD") # xxx factor with testament.specs.isAzure
-  # In Azure on Windows tests run as an admin user
-  if isAzure and defined(windows): doAssert isAdmin()
-  # In Azure on POSIX tests run as a normal user
-  if isAzure and defined(posix): doAssert not isAdmin()
+  when doslikeFileSystem:
+    doAssert "c:a.b".searchExtPos == 3
+    doAssert "c:.a".searchExtPos == -1
+    doAssert r"c:\.a".searchExtPos == -1
+    doAssert "c:..a".searchExtPos == -1
+    doAssert r"c:\..a".searchExtPos == -1
+    doAssert "c:.a.b".searchExtPos == 4

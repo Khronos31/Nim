@@ -7,7 +7,7 @@
 #    distribution, for details about the copyright.
 #
 
-from posix import Timespec
+from std/posix import Timespec
 
 when defined(macosx) or defined(freebsd) or defined(openbsd) or
      defined(dragonfly):
@@ -28,6 +28,15 @@ elif defined(netbsd):
     EVFILT_PROC*     = 4 ## attached to struct proc
     EVFILT_SIGNAL*   = 5 ## attached to struct proc
     EVFILT_TIMER*    = 6 ## timers (in ms)
+elif defined(haiku):
+  const
+    EVFILT_READ*     = -1
+    EVFILT_WRITE*    = -2
+    EVFILT_AIO*      = -3 ## attached to aio requests
+    EVFILT_VNODE*    = -4 ## attached to vnodes
+    EVFILT_PROC*     = -5 ## attached to struct proc
+    EVFILT_SIGNAL*   = -6 ## attached to struct proc
+    EVFILT_TIMER*    = -7 ## timers
 when defined(macosx):
   const
     EVFILT_MACHPORT* = -8  ## Mach portsets

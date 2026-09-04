@@ -11,7 +11,7 @@
 # semantic checking.
 
 import
-  options, ast, msgs, passes, docgen, lineinfos, pathutils
+  options, ast, msgs, docgen, lineinfos, pathutils, packages
 
 from modulegraphs import ModuleGraph, PPassContext
 
@@ -23,13 +23,12 @@ type
   PGen = ref TGen
 
 proc shouldProcess(g: PGen): bool =
-  (optWholeProject in g.doc.conf.globalOptions and g.module.getnimblePkgId == g.doc.conf.mainPackageId) or
+  (optWholeProject in g.doc.conf.globalOptions and g.doc.conf.belongsToProjectPackage(g.module)) or
       sfMainModule in g.module.flags or g.config.projectMainIdx == g.module.info.fileIndex
 
 template closeImpl(body: untyped) {.dirty.} =
   var g = PGen(p)
   let useWarning = sfMainModule notin g.module.flags
-  let groupedToc = true
   if shouldProcess(g):
     finishGenerateDoc(g.doc)
     body
@@ -38,25 +37,27 @@ template closeImpl(body: untyped) {.dirty.} =
     except IOError:
       discard
 
-proc close(graph: ModuleGraph; p: PPassContext, n: PNode): PNode =
+proc closeDoc*(graph: ModuleGraph; p: PPassContext, n: PNode): PNode =
+  result = nil
   closeImpl:
-    writeOutput(g.doc, useWarning, groupedToc)
+    writeOutput(g.doc, useWarning, true)
 
-proc closeJson(graph: ModuleGraph; p: PPassContext, n: PNode): PNode =
+proc closeJson*(graph: ModuleGraph; p: PPassContext, n: PNode): PNode =
+  result = nil
   closeImpl:
     writeOutputJson(g.doc, useWarning)
 
-proc processNode(c: PPassContext, n: PNode): PNode =
+proc processNode*(c: PPassContext, n: PNode): PNode =
   result = n
   var g = PGen(c)
   if shouldProcess(g):
-    generateDoc(g.doc, n, n)
+    generateDoc(g.doc, n, n, g.config)
 
-proc processNodeJson(c: PPassContext, n: PNode): PNode =
+proc processNodeJson*(c: PPassContext, n: PNode): PNode =
   result = n
   var g = PGen(c)
   if shouldProcess(g):
-    generateJson(g.doc, n, false)
+    generateJson(g.doc, n, g.config, false)
 
 template myOpenImpl(ext: untyped) {.dirty.} =
   var g: PGen
@@ -64,25 +65,15 @@ template myOpenImpl(ext: untyped) {.dirty.} =
   g.module = module
   g.config = graph.config
   var d = newDocumentor(AbsoluteFile toFullPath(graph.config, FileIndex module.position),
-      graph.cache, graph.config, ext, module)
-  d.hasToc = true
+      graph.cache, graph.config, ext, module, hasToc = true)
   g.doc = d
   result = g
 
-proc myOpen(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext =
+proc openHtml*(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext =
   myOpenImpl(HtmlExt)
 
-proc myOpenTex(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext =
+proc openTex*(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext =
   myOpenImpl(TexExt)
 
-proc myOpenJson(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext =
+proc openJson*(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext =
   myOpenImpl(JsonExt)
-
-const docgen2Pass* = makePass(open = myOpen, process = processNode, close = close)
-const docgen2TexPass* = makePass(open = myOpenTex, process = processNode,
-                                 close = close)
-const docgen2JsonPass* = makePass(open = myOpenJson, process = processNodeJson,
-                                  close = closeJson)
-
-proc finishDoc2Pass*(project: string) =
-  discard

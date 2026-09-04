@@ -15,6 +15,11 @@
 ## Other modules may provide other implementations for this standard
 ## stream interface.
 ##
+## .. warning:: Due to the use of `pointer`, the `readData`, `peekData` and
+##   `writeData` interfaces are not available on the compile-time VM, and must
+##   be cast from a `ptr string` on the JS backend. However, `readDataStr` is
+##   available generally in place of `readData`.
+##
 ## Basic usage
 ## ===========
 ##
@@ -27,67 +32,67 @@
 ## StringStream example
 ## --------------------
 ##
-## .. code-block:: Nim
+##   ```Nim
+##   import std/streams
 ##
-##  import std/streams
+##   var strm = newStringStream("""The first line
+##   the second line
+##   the third line""")
 ##
-##  var strm = newStringStream("""The first line
-##  the second line
-##  the third line""")
+##   var line = ""
 ##
-##  var line = ""
+##   while strm.readLine(line):
+##     echo line
 ##
-##  while strm.readLine(line):
-##    echo line
+##   # Output:
+##   # The first line
+##   # the second line
+##   # the third line
 ##
-##  # Output:
-##  # The first line
-##  # the second line
-##  # the third line
-##
-##  strm.close()
+##   strm.close()
+##   ```
 ##
 ## FileStream example
 ## ------------------
 ##
 ## Write file stream example:
 ##
-## .. code-block:: Nim
+##   ```Nim
+##   import std/streams
 ##
-##  import std/streams
+##   var strm = newFileStream("somefile.txt", fmWrite)
+##   var line = ""
 ##
-##  var strm = newFileStream("somefile.txt", fmWrite)
-##  var line = ""
+##   if not isNil(strm):
+##     strm.writeLine("The first line")
+##     strm.writeLine("the second line")
+##     strm.writeLine("the third line")
+##     strm.close()
 ##
-##  if not isNil(strm):
-##    strm.writeLine("The first line")
-##    strm.writeLine("the second line")
-##    strm.writeLine("the third line")
-##    strm.close()
-##
-##  # Output (somefile.txt):
-##  # The first line
-##  # the second line
-##  # the third line
+##   # Output (somefile.txt):
+##   # The first line
+##   # the second line
+##   # the third line
+##   ```
 ##
 ## Read file stream example:
 ##
-## .. code-block:: Nim
+##   ```Nim
+##   import std/streams
 ##
-##  import std/streams
+##   var strm = newFileStream("somefile.txt", fmRead)
+##   var line = ""
 ##
-##  var strm = newFileStream("somefile.txt", fmRead)
-##  var line = ""
+##   if not isNil(strm):
+##     while strm.readLine(line):
+##       echo line
+##     strm.close()
 ##
-##  if not isNil(strm):
-##    while strm.readLine(line):
-##      echo line
-##    strm.close()
-##
-##  # Output:
-##  # The first line
-##  # the second line
-##  # the third line
+##   # Output:
+##   # The first line
+##   # the second line
+##   # the third line
+##   ```
 ##
 ## See also
 ## ========
@@ -98,6 +103,7 @@ import std/private/since
 
 when defined(nimPreviewSlimSystem):
   import std/syncio
+  export FileMode
 
 proc newEIO(msg: string): owned(ref IOError) =
   new(result)
@@ -114,7 +120,7 @@ type
     ## * That these fields here shouldn't be used directly.
     ##   They are accessible so that a stream implementation can override them.
     closeImpl*: proc (s: Stream)
-      {.nimcall, raises: [Exception, IOError, OSError], tags: [WriteIOEffect], gcsafe.}
+      {.nimcall, raises: [IOError, OSError], tags: [WriteIOEffect], gcsafe.}
     atEndImpl*: proc (s: Stream): bool
       {.nimcall, raises: [Defect, IOError, OSError], tags: [], gcsafe.}
     setPositionImpl*: proc (s: Stream, pos: int)
@@ -173,10 +179,20 @@ proc close*(s: Stream) =
   ## See also:
   ## * `flush proc <#flush,Stream>`_
   runnableExamples:
-    var strm = newStringStream("The first line\nthe second line\nthe third line")
-    ## do something...
-    strm.close()
-  if not isNil(s.closeImpl): s.closeImpl(s)
+    block:
+      let strm = newStringStream("The first line\nthe second line\nthe third line")
+      ## do something...
+      strm.close()
+
+    block:
+      let strm = newFileStream("amissingfile.txt")
+      # deferring works even if newFileStream fails
+      defer: strm.close()
+      if not isNil(strm):
+        ## do something...
+
+  if not isNil(s) and not isNil(s.closeImpl):
+    s.closeImpl(s)
 
 proc atEnd*(s: Stream): bool =
   ## Checks if more data can be read from `s`. Returns ``true`` if all data has
@@ -243,7 +259,8 @@ proc readDataStr*(s: Stream, buffer: var string, slice: Slice[int]): int =
     result = s.readDataStrImpl(s, buffer, slice)
   else:
     # fallback
-    result = s.readData(addr buffer[slice.a], slice.b + 1 - slice.a)
+    result = s.readData(beginStore(buffer, buffer.len, slice.a), slice.b + 1 - slice.a)
+    endStore(buffer)
 
 template jsOrVmBlock(caseJsOrVm, caseElse: untyped): untyped =
   when nimvm:
@@ -267,9 +284,9 @@ when (NimMajor, NimMinor) >= (1, 3) or not defined(js):
       strm.close()
 
     const bufferSize = 1024
+    result = ""
     jsOrVmBlock:
-      var buffer2: string
-      buffer2.setLen(bufferSize)
+      var buffer2 = newString(bufferSize)
       while true:
         let readBytes = readDataStr(s, buffer2, 0..<bufferSize)
         if readBytes == 0:
@@ -334,9 +351,9 @@ proc write*[T](s: Stream, x: T) =
   ## **Note:** Not available for JS backend. Use `write(Stream, string)
   ## <#write,Stream,string>`_ for now.
   ##
-  ## .. code-block:: Nim
-  ##
-  ##     s.writeData(s, unsafeAddr(x), sizeof(x))
+  ##   ```Nim
+  ##   s.writeData(s, unsafeAddr(x), sizeof(x))
+  ##   ```
   runnableExamples:
     var strm = newStringStream("")
     strm.write("abcde")
@@ -443,7 +460,7 @@ proc readChar*(s: Stream): char =
     doAssert strm.readChar() == '3'
     doAssert strm.readChar() == '\x00'
     strm.close()
-
+  result = '\0'
   jsOrVmBlock:
     var str = " "
     if readDataStr(s, str, 0..0) != 1: result = '\0'
@@ -462,6 +479,7 @@ proc peekChar*(s: Stream): char =
     doAssert strm.peekChar() == '\x00'
     strm.close()
 
+  result = '\0'
   when defined(js):
     var str = " "
     if peekData(s, addr(str), sizeof(result)) != 1: result = '\0'
@@ -490,7 +508,7 @@ proc readBool*(s: Stream): bool =
     doAssertRaises(IOError): discard strm.readBool()
     strm.close()
 
-  var t: byte
+  var t: byte = byte(0)
   read(s, t)
   result = t != 0.byte
 
@@ -517,7 +535,7 @@ proc peekBool*(s: Stream): bool =
     doAssert strm.peekBool() == false
     strm.close()
 
-  var t: byte
+  var t: byte = byte(0)
   peek(s, t)
   result = t != 0.byte
 
@@ -537,7 +555,7 @@ proc readInt8*(s: Stream): int8 =
     doAssert strm.readInt8() == 2'i8
     doAssertRaises(IOError): discard strm.readInt8()
     strm.close()
-
+  result = int8(0)
   read(s, result)
 
 proc peekInt8*(s: Stream): int8 =
@@ -558,7 +576,7 @@ proc peekInt8*(s: Stream): int8 =
     doAssert strm.readInt8() == 1'i8
     doAssert strm.peekInt8() == 2'i8
     strm.close()
-
+  result = int8(0)
   peek(s, result)
 
 proc readInt16*(s: Stream): int16 =
@@ -577,7 +595,7 @@ proc readInt16*(s: Stream): int16 =
     doAssert strm.readInt16() == 2'i16
     doAssertRaises(IOError): discard strm.readInt16()
     strm.close()
-
+  result = int16(0)
   read(s, result)
 
 proc peekInt16*(s: Stream): int16 =
@@ -598,7 +616,7 @@ proc peekInt16*(s: Stream): int16 =
     doAssert strm.readInt16() == 1'i16
     doAssert strm.peekInt16() == 2'i16
     strm.close()
-
+  result = int16(0)
   peek(s, result)
 
 proc readInt32*(s: Stream): int32 =
@@ -617,7 +635,7 @@ proc readInt32*(s: Stream): int32 =
     doAssert strm.readInt32() == 2'i32
     doAssertRaises(IOError): discard strm.readInt32()
     strm.close()
-
+  result = int32(0)
   read(s, result)
 
 proc peekInt32*(s: Stream): int32 =
@@ -638,7 +656,7 @@ proc peekInt32*(s: Stream): int32 =
     doAssert strm.readInt32() == 1'i32
     doAssert strm.peekInt32() == 2'i32
     strm.close()
-
+  result = int32(0)
   peek(s, result)
 
 proc readInt64*(s: Stream): int64 =
@@ -657,7 +675,7 @@ proc readInt64*(s: Stream): int64 =
     doAssert strm.readInt64() == 2'i64
     doAssertRaises(IOError): discard strm.readInt64()
     strm.close()
-
+  result = int64(0)
   read(s, result)
 
 proc peekInt64*(s: Stream): int64 =
@@ -678,7 +696,7 @@ proc peekInt64*(s: Stream): int64 =
     doAssert strm.readInt64() == 1'i64
     doAssert strm.peekInt64() == 2'i64
     strm.close()
-
+  result = int64(0)
   peek(s, result)
 
 proc readUint8*(s: Stream): uint8 =
@@ -697,7 +715,7 @@ proc readUint8*(s: Stream): uint8 =
     doAssert strm.readUint8() == 2'u8
     doAssertRaises(IOError): discard strm.readUint8()
     strm.close()
-
+  result = uint8(0)
   read(s, result)
 
 proc peekUint8*(s: Stream): uint8 =
@@ -718,7 +736,7 @@ proc peekUint8*(s: Stream): uint8 =
     doAssert strm.readUint8() == 1'u8
     doAssert strm.peekUint8() == 2'u8
     strm.close()
-
+  result = uint8(0)
   peek(s, result)
 
 proc readUint16*(s: Stream): uint16 =
@@ -737,7 +755,7 @@ proc readUint16*(s: Stream): uint16 =
     doAssert strm.readUint16() == 2'u16
     doAssertRaises(IOError): discard strm.readUint16()
     strm.close()
-
+  result = uint16(0)
   read(s, result)
 
 proc peekUint16*(s: Stream): uint16 =
@@ -758,7 +776,7 @@ proc peekUint16*(s: Stream): uint16 =
     doAssert strm.readUint16() == 1'u16
     doAssert strm.peekUint16() == 2'u16
     strm.close()
-
+  result = uint16(0)
   peek(s, result)
 
 proc readUint32*(s: Stream): uint32 =
@@ -778,7 +796,7 @@ proc readUint32*(s: Stream): uint32 =
     doAssert strm.readUint32() == 2'u32
     doAssertRaises(IOError): discard strm.readUint32()
     strm.close()
-
+  result = uint32(0)
   read(s, result)
 
 proc peekUint32*(s: Stream): uint32 =
@@ -799,7 +817,7 @@ proc peekUint32*(s: Stream): uint32 =
     doAssert strm.readUint32() == 1'u32
     doAssert strm.peekUint32() == 2'u32
     strm.close()
-
+  result = uint32(0)
   peek(s, result)
 
 proc readUint64*(s: Stream): uint64 =
@@ -818,7 +836,7 @@ proc readUint64*(s: Stream): uint64 =
     doAssert strm.readUint64() == 2'u64
     doAssertRaises(IOError): discard strm.readUint64()
     strm.close()
-
+  result = uint64(0)
   read(s, result)
 
 proc peekUint64*(s: Stream): uint64 =
@@ -839,7 +857,7 @@ proc peekUint64*(s: Stream): uint64 =
     doAssert strm.readUint64() == 1'u64
     doAssert strm.peekUint64() == 2'u64
     strm.close()
-
+  result = uint64(0)
   peek(s, result)
 
 proc readFloat32*(s: Stream): float32 =
@@ -858,7 +876,7 @@ proc readFloat32*(s: Stream): float32 =
     doAssert strm.readFloat32() == 2'f32
     doAssertRaises(IOError): discard strm.readFloat32()
     strm.close()
-
+  result = 0.0
   read(s, result)
 
 proc peekFloat32*(s: Stream): float32 =
@@ -879,7 +897,7 @@ proc peekFloat32*(s: Stream): float32 =
     doAssert strm.readFloat32() == 1'f32
     doAssert strm.peekFloat32() == 2'f32
     strm.close()
-
+  result = 0.0
   peek(s, result)
 
 proc readFloat64*(s: Stream): float64 =
@@ -898,7 +916,7 @@ proc readFloat64*(s: Stream): float64 =
     doAssert strm.readFloat64() == 2'f64
     doAssertRaises(IOError): discard strm.readFloat64()
     strm.close()
-
+  result = 0.0
   read(s, result)
 
 proc peekFloat64*(s: Stream): float64 =
@@ -919,15 +937,19 @@ proc peekFloat64*(s: Stream): float64 =
     doAssert strm.readFloat64() == 1'f64
     doAssert strm.peekFloat64() == 2'f64
     strm.close()
-
+  result = 0.0
   peek(s, result)
 
 proc readStrPrivate(s: Stream, length: int, str: var string) =
   if length > len(str): setLen(str, length)
-  when defined(js):
-    let L = readData(s, addr(str), length)
+  var L: int
+  when nimvm:
+    L = readDataStr(s, str, 0..length-1)
   else:
-    let L = readData(s, cstring(str), length)
+    when defined(js):
+      L = readData(s, addr(str), length)
+    else:
+      L = readData(s, cstring(str), length)
   if L != len(str): setLen(str, L)
 
 proc readStr*(s: Stream, length: int, str: var string) {.since: (1, 3).} =
@@ -1116,7 +1138,7 @@ iterator lines*(s: Stream): string =
     doAssert lines == @["The first line", "the second line", "the third line"]
     strm.close()
 
-  var line: string
+  var line: string = ""
   while s.readLine(line):
     yield line
 
@@ -1194,12 +1216,18 @@ else: # after 1.3 or JS not defined
 
   proc ssReadDataStr(s: Stream, buffer: var string, slice: Slice[int]): int =
     var s = StringStream(s)
+    when nimvm:
+      discard
+    else:
+      when declared(prepareMutation):
+        prepareMutation(buffer) # buffer might potentially be a CoW literal with ARC
     result = min(slice.b + 1 - slice.a, s.data.len - s.pos)
     if result > 0:
       jsOrVmBlock:
         buffer[slice.a..<slice.a+result] = s.data[s.pos..<s.pos+result]
       do:
-        copyMem(unsafeAddr buffer[slice.a], addr s.data[s.pos], result)
+        copyMem(beginStore(buffer, buffer.len, slice.a), readRawData(s.data, s.pos), result)
+        endStore(buffer)
       inc(s.pos, result)
     else:
       result = 0
@@ -1215,7 +1243,7 @@ else: # after 1.3 or JS not defined
           raise newException(Defect, "could not read string stream, " &
             "did you use a non-string buffer pointer?", getCurrentException())
       elif not defined(nimscript):
-        copyMem(buffer, addr(s.data[s.pos]), result)
+        copyMem(buffer, readRawData(s.data, s.pos), result)
       inc(s.pos, result)
     else:
       result = 0
@@ -1231,7 +1259,7 @@ else: # after 1.3 or JS not defined
           raise newException(Defect, "could not peek string stream, " &
             "did you use a non-string buffer pointer?", getCurrentException())
       elif not defined(nimscript):
-        copyMem(buffer, addr(s.data[s.pos]), result)
+        copyMem(buffer, readRawData(s.data, s.pos), result)
     else:
       result = 0
 
@@ -1239,16 +1267,17 @@ else: # after 1.3 or JS not defined
     var s = StringStream(s)
     if bufLen <= 0:
       return
-    if s.pos + bufLen > s.data.len:
-      setLen(s.data, s.pos + bufLen)
     when defined(js):
+      if s.pos + bufLen > s.data.len:
+        setLen(s.data, s.pos + bufLen)
       try:
         s.data[s.pos..<s.pos+bufLen] = cast[ptr string](buffer)[][0..<bufLen]
       except:
         raise newException(Defect, "could not write to string stream, " &
           "did you use a non-string buffer pointer?", getCurrentException())
     elif not defined(nimscript):
-      copyMem(addr(s.data[s.pos]), buffer, bufLen)
+      copyMem(beginStore(s.data, max(s.data.len, s.pos + bufLen), s.pos), buffer, bufLen)
+      endStore(s.data)
     inc(s.pos, bufLen)
 
   proc ssClose(s: Stream) =
@@ -1274,6 +1303,11 @@ else: # after 1.3 or JS not defined
 
     new(result)
     result.data = s
+    when nimvm:
+      discard
+    else:
+      when declared(prepareMutation):
+        prepareMutation(result.data) # Allows us to mutate using `addr` logic like `copyMem`, otherwise it errors.
     result.pos = 0
     result.closeImpl = ssClose
     result.atEndImpl = ssAtEnd
@@ -1311,7 +1345,9 @@ proc fsReadData(s: Stream, buffer: pointer, bufLen: int): int =
   result = readBuffer(FileStream(s).f, buffer, bufLen)
 
 proc fsReadDataStr(s: Stream, buffer: var string, slice: Slice[int]): int =
-  result = readBuffer(FileStream(s).f, addr buffer[slice.a], slice.b + 1 - slice.a)
+  let len = slice.b + 1 - slice.a
+  result = readBuffer(FileStream(s).f, beginStore(buffer, buffer.len, slice.a), len)
+  endStore(buffer)
 
 proc fsPeekData(s: Stream, buffer: pointer, bufLen: int): int =
   let pos = fsGetPosition(s)
@@ -1403,8 +1439,9 @@ proc newFileStream*(filename: string, mode: FileMode = fmRead,
       ## the third line
       removeFile("somefile.txt")
 
-  var f: File
+  var f: File = default(File)
   if open(f, filename, mode, bufSize): result = newFileStream(f)
+  else: result = nil
 
 proc openFileStream*(filename: string, mode: FileMode = fmRead,
     bufSize: int = -1): owned FileStream =
@@ -1434,7 +1471,7 @@ proc openFileStream*(filename: string, mode: FileMode = fmRead,
     except:
       stderr.write getCurrentExceptionMsg()
 
-  var f: File
+  var f: File = default(File)
   if open(f, filename, mode, bufSize):
     return newFileStream(f)
   else:
@@ -1458,7 +1495,7 @@ when false:
     # do not import windows as this increases compile times:
     discard
   else:
-    import posix
+    import std/posix
 
     proc hsSetPosition(s: FileHandleStream, pos: int) =
       discard lseek(s.handle, pos, SEEK_SET)
@@ -1506,7 +1543,7 @@ when false:
       of fmReadWrite: flags = O_RDWR or int(O_CREAT)
       of fmReadWriteExisting: flags = O_RDWR
       of fmAppend: flags = O_WRONLY or int(O_CREAT) or O_APPEND
-      static: doAssert false # handle bug #17888
+      static: raiseAssert "unreachable" # handle bug #17888
       var handle = open(filename, flags)
       if handle < 0: raise newEOS("posix.open() call failed")
     result = newFileHandleStream(handle)

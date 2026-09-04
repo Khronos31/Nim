@@ -10,6 +10,9 @@
 ## Types and operations for atomic operations and lockless algorithms.
 ##
 ## Unstable API.
+## 
+## By default, C++ uses C11 atomic primitives. To use C++ `std::atomic`,
+## `-d:nimUseCppAtomics` can be defined.
 
 runnableExamples:
   # Atomic
@@ -50,8 +53,7 @@ runnableExamples:
   flag.clear(moRelaxed)
   assert not flag.testAndSet
 
-
-when defined(cpp) or defined(nimdoc):
+when (defined(cpp) and defined(nimUseCppAtomics)) or defined(nimdoc):
   # For the C++ backend, types and operations map directly to C++11 atomics.
 
   {.push, header: "<atomic>".}
@@ -211,8 +213,8 @@ else:
 
     # MSVC intrinsics
     proc interlockedExchange(location: pointer; desired: int8): int8 {.importc: "_InterlockedExchange8".}
-    proc interlockedExchange(location: pointer; desired: int16): int16 {.importc: "_InterlockedExchange".}
-    proc interlockedExchange(location: pointer; desired: int32): int32 {.importc: "_InterlockedExchange16".}
+    proc interlockedExchange(location: pointer; desired: int16): int16 {.importc: "_InterlockedExchange16".}
+    proc interlockedExchange(location: pointer; desired: int32): int32 {.importc: "_InterlockedExchange".}
     proc interlockedExchange(location: pointer; desired: int64): int64 {.importc: "_InterlockedExchange64".}
 
     proc interlockedCompareExchange(location: pointer; desired, expected: int8): int8 {.importc: "_InterlockedCompareExchange8".}
@@ -254,12 +256,8 @@ else:
       cast[T](interlockedExchange(addr(location.value), cast[int64](desired)))
     proc compareExchange*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; success, failure: MemoryOrder): bool {.inline.} =
       cast[T](interlockedCompareExchange(addr(location.value), cast[nonAtomicType(T)](desired), cast[nonAtomicType(T)](expected))) == expected
-    proc compareExchange*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
-      compareExchange(location, expected, desired, order, order)
     proc compareExchangeWeak*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; success, failure: MemoryOrder): bool {.inline.} =
       compareExchange(location, expected, desired, success, failure)
-    proc compareExchangeWeak*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
-      compareExchangeWeak(location, expected, desired, order, order)
 
     proc fetchAdd*[T: SomeInteger](location: var Atomic[T]; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.inline.} =
       var currentValue = location.load()
@@ -274,10 +272,17 @@ else:
       cast[T](interlockedXor(addr(location.value), cast[nonAtomicType(T)](value)))
 
   else:
-    {.push, header: "<stdatomic.h>".}
+    when defined(cpp):
+      {.push, header: "<atomic>".}
+      template maybeWrapStd(x: string): string =
+        "std::" & x
+    else:
+      {.push, header: "<stdatomic.h>".}
+      template maybeWrapStd(x: string): string =
+        x
 
     type
-      MemoryOrder* {.importc: "memory_order".} = enum
+      MemoryOrder* {.importc: "memory_order".maybeWrapStd.} = enum
         moRelaxed
         moConsume
         moAcquire
@@ -285,16 +290,25 @@ else:
         moAcquireRelease
         moSequentiallyConsistent
 
-    type
-      # Atomic* {.importcpp: "_Atomic('0)".} [T] = object
+    when defined(cpp):
+      type
+        # Atomic*[T] {.importcpp: "_Atomic('0)".} = object
 
-      AtomicInt8 {.importc: "_Atomic NI8".} = int8
-      AtomicInt16 {.importc: "_Atomic NI16".} = int16
-      AtomicInt32 {.importc: "_Atomic NI32".} = int32
-      AtomicInt64 {.importc: "_Atomic NI64".} = int64
+        AtomicInt8 {.importc: "std::atomic<NI8>".} = int8
+        AtomicInt16 {.importc: "std::atomic<NI16>".} = int16
+        AtomicInt32 {.importc: "std::atomic<NI32>".} = int32
+        AtomicInt64 {.importc: "std::atomic<NI64>".} = int64
+    else:
+      type
+        # Atomic*[T] {.importcpp: "_Atomic('0)".} = object
+
+        AtomicInt8 {.importc: "_Atomic NI8".} = int8
+        AtomicInt16 {.importc: "_Atomic NI16".} = int16
+        AtomicInt32 {.importc: "_Atomic NI32".} = int32
+        AtomicInt64 {.importc: "_Atomic NI64".} = int64
 
     type
-      AtomicFlag* {.importc: "atomic_flag", size: 1.} = object
+      AtomicFlag* {.importc: "atomic_flag".maybeWrapStd, size: 1.} = object
 
       Atomic*[T] = object
         when T is Trivial:
@@ -308,27 +322,27 @@ else:
           guard: AtomicFlag
 
     #proc init*[T](location: var Atomic[T]; value: T): T {.importcpp: "atomic_init(@)".}
-    proc atomic_load_explicit[T, A](location: ptr A; order: MemoryOrder): T {.importc.}
-    proc atomic_store_explicit[T, A](location: ptr A; desired: T; order: MemoryOrder = moSequentiallyConsistent) {.importc.}
-    proc atomic_exchange_explicit[T, A](location: ptr A; desired: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc.}
-    proc atomic_compare_exchange_strong_explicit[T, A](location: ptr A; expected: ptr T; desired: T; success, failure: MemoryOrder): bool {.importc.}
-    proc atomic_compare_exchange_weak_explicit[T, A](location: ptr A; expected: ptr T; desired: T; success, failure: MemoryOrder): bool {.importc.}
+    proc atomic_load_explicit[T, A](location: ptr A; order: MemoryOrder): T {.importc: "atomic_load_explicit".maybeWrapStd.}
+    proc atomic_store_explicit[T, A](location: ptr A; desired: T; order: MemoryOrder = moSequentiallyConsistent) {.importc: "atomic_store_explicit".maybeWrapStd.}
+    proc atomic_exchange_explicit[T, A](location: ptr A; desired: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc: "atomic_exchange_explicit".maybeWrapStd.}
+    proc atomic_compare_exchange_strong_explicit[T, A](location: ptr A; expected: ptr T; desired: T; success, failure: MemoryOrder): bool {.importc: "atomic_compare_exchange_strong_explicit".maybeWrapStd.}
+    proc atomic_compare_exchange_weak_explicit[T, A](location: ptr A; expected: ptr T; desired: T; success, failure: MemoryOrder): bool {.importc: "atomic_compare_exchange_weak_explicit".maybeWrapStd.}
 
     # Numerical operations
-    proc atomic_fetch_add_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc.}
-    proc atomic_fetch_sub_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc.}
-    proc atomic_fetch_and_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc.}
-    proc atomic_fetch_or_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc.}
-    proc atomic_fetch_xor_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc.}
+    proc atomic_fetch_add_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc: "atomic_fetch_add_explicit".maybeWrapStd.}
+    proc atomic_fetch_sub_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc: "atomic_fetch_sub_explicit".maybeWrapStd.}
+    proc atomic_fetch_and_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc: "atomic_fetch_and_explicit".maybeWrapStd.}
+    proc atomic_fetch_or_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc: "atomic_fetch_or_explicit".maybeWrapStd.}
+    proc atomic_fetch_xor_explicit[T, A](location: ptr A; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.importc: "atomic_fetch_xor_explicit".maybeWrapStd.}
 
     # Flag operations
     # var ATOMIC_FLAG_INIT {.importc, nodecl.}: AtomicFlag
     # proc init*(location: var AtomicFlag) {.inline.} = location = ATOMIC_FLAG_INIT
-    proc testAndSet*(location: var AtomicFlag; order: MemoryOrder = moSequentiallyConsistent): bool {.importc: "atomic_flag_test_and_set_explicit".}
-    proc clear*(location: var AtomicFlag; order: MemoryOrder = moSequentiallyConsistent) {.importc: "atomic_flag_clear_explicit".}
+    proc testAndSet*(location: var AtomicFlag; order: MemoryOrder = moSequentiallyConsistent): bool {.importc: "atomic_flag_test_and_set_explicit".maybeWrapStd.}
+    proc clear*(location: var AtomicFlag; order: MemoryOrder = moSequentiallyConsistent) {.importc: "atomic_flag_clear_explicit".maybeWrapStd.}
 
-    proc fence*(order: MemoryOrder) {.importc: "atomic_thread_fence".}
-    proc signalFence*(order: MemoryOrder) {.importc: "atomic_signal_fence".}
+    proc fence*(order: MemoryOrder) {.importc: "atomic_thread_fence".maybeWrapStd.}
+    proc signalFence*(order: MemoryOrder) {.importc: "atomic_signal_fence".maybeWrapStd.}
 
     {.pop.}
 
@@ -340,13 +354,9 @@ else:
       cast[T](atomic_exchange_explicit(addr(location.value), cast[nonAtomicType(T)](desired), order))
     proc compareExchange*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; success, failure: MemoryOrder): bool {.inline.} =
       atomic_compare_exchange_strong_explicit(addr(location.value), cast[ptr nonAtomicType(T)](addr(expected)), cast[nonAtomicType(T)](desired), success, failure)
-    proc compareExchange*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
-      compareExchange(location, expected, desired, order, order)
 
     proc compareExchangeWeak*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; success, failure: MemoryOrder): bool {.inline.} =
       atomic_compare_exchange_weak_explicit(addr(location.value), cast[ptr nonAtomicType(T)](addr(expected)), cast[nonAtomicType(T)](desired), success, failure)
-    proc compareExchangeWeak*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
-      compareExchangeWeak(location, expected, desired, order, order)
 
     # Numerical operations
     proc fetchAdd*[T: SomeInteger](location: var Atomic[T]; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.inline.} =
@@ -359,6 +369,21 @@ else:
       cast[T](atomic_fetch_or_explicit(addr(location.value), cast[nonAtomicType(T)](value), order))
     proc fetchXor*[T: SomeInteger](location: var Atomic[T]; value: T; order: MemoryOrder = moSequentiallyConsistent): T {.inline.} =
       cast[T](atomic_fetch_xor_explicit(addr(location.value), cast[nonAtomicType(T)](value), order))
+
+  func compareExchangeFailureOrder(order: MemoryOrder): MemoryOrder {.inline.} =
+    case order
+    of moRelease:
+      moRelaxed
+    of moAcquireRelease:
+      moAcquire
+    else:
+      order
+
+  proc compareExchange*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
+    compareExchange(location, expected, desired, order, compareExchangeFailureOrder(order))
+
+  proc compareExchangeWeak*[T: Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
+    compareExchangeWeak(location, expected, desired, order, compareExchangeFailureOrder(order))
 
   template withLock[T: not Trivial](location: var Atomic[T]; order: MemoryOrder; body: untyped): untyped =
     while testAndSet(location.guard, moAcquire): discard
@@ -393,10 +418,10 @@ else:
     compareExchange(location, expected, desired, success, failure)
 
   proc compareExchange*[T: not Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
-    compareExchange(location, expected, desired, order, order)
+    compareExchange(location, expected, desired, order, compareExchangeFailureOrder(order))
 
   proc compareExchangeWeak*[T: not Trivial](location: var Atomic[T]; expected: var T; desired: T; order: MemoryOrder = moSequentiallyConsistent): bool {.inline.} =
-    compareExchangeWeak(location, expected, desired, order, order)
+    compareExchangeWeak(location, expected, desired, order, compareExchangeFailureOrder(order))
 
 proc atomicInc*[T: SomeInteger](location: var Atomic[T]; value: T = 1) {.inline.} =
   ## Atomically increments the atomic integer by some `value`.

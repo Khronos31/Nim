@@ -409,12 +409,22 @@ proc toObjFile*(conf: ConfigRef; filename: AbsoluteFile): AbsoluteFile =
 proc addFileToCompile*(conf: ConfigRef; cf: Cfile) =
   conf.toCompile.add(cf)
 
-proc addLocalCompileOption*(conf: ConfigRef; option: string; nimfile: AbsoluteFile) =
-  let key = completeCfilePath(conf, mangleModuleName(conf, nimfile).AbsoluteFile).string
+proc addCFileSpecificOption(conf: ConfigRef; option, key: string) =
   var value = conf.cfileSpecificOptions.getOrDefault(key)
   if strutils.find(value, option, 0) < 0:
     addOpt(value, option)
     conf.cfileSpecificOptions[key] = value
+
+proc addLocalCompileOption*(conf: ConfigRef; option: string; nimfile: AbsoluteFile) =
+  let key = completeCfilePath(conf, mangleModuleName(conf, nimfile).AbsoluteFile).string
+  addCFileSpecificOption(conf, option, key)
+
+proc addLocalCompileOptionForCFile*(conf: ConfigRef; option: string;
+                                   cfile: AbsoluteFile) =
+  ## Add an option for an already generated C file. IC's backend gives loaded
+  ## modules synthetic filenames, so the source-file-based key used by
+  ## `addLocalCompileOption` does not identify the C file emitted for them.
+  addCFileSpecificOption(conf, option, cfile.changeFileExt("").string)
 
 proc resetCompilationLists*(conf: ConfigRef) =
   conf.toCompile.setLen 0
@@ -471,8 +481,19 @@ proc noAbsolutePaths(conf: ConfigRef): bool {.inline.} =
       {optGenScript, optGenMapping}
   result = conf.globalOptions * options != {}
 
+proc targetOptions(conf: ConfigRef): string =
+  # Solaris/illumos toolchains can default to 32-bit output on amd64.
+  # Inspect the target, not the host, so cross-compilation works too.
+  if conf.target.targetOS in {osSolaris, osIllumos} and
+      conf.target.targetCPU == cpuAmd64 and
+      conf.cCompiler in {ccGcc, ccCLang}:
+    result = "-m64"
+  else:
+    result = ""
+
 proc cFileSpecificOptions(conf: ConfigRef; nimname, fullNimFile: string): string =
-  result = conf.compileOptions
+  result = targetOptions(conf)
+  addOpt(result, conf.compileOptions)
 
   if (conf.cCompiler == ccGcc or conf.cCompiler == ccCLang) and
        conf.selectedGC == gcRefc:
@@ -520,7 +541,8 @@ proc vccplatform(conf: ConfigRef): string =
     result = ""
 
 proc getLinkOptions(conf: ConfigRef): string =
-  result = conf.linkOptions & " " & conf.linkOptionsCmd & " "
+  result = targetOptions(conf)
+  addOpt(result, conf.linkOptions & " " & conf.linkOptionsCmd & " ")
   for linkedLib in items(conf.cLinkedLibs):
     result.add(CC[conf.cCompiler].linkLibCmd % linkedLib.quoteShell)
   for libDir in items(conf.cLibs):
